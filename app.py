@@ -10,8 +10,8 @@ st.set_page_config(page_title="Superinvestor Screener", layout="centered")
 
 st.title("🧠 Superinvestor Screener")
 st.write(
-    "Type 1 ticker and choose a lens. The app fetches TTM/MRQ numbers via yfinance and shows quick valuation stats. "
-    "This is an idea filter only — numbers are approximate."
+    "Type a ticker and choose a lens. We fetch TTM/MRQ numbers via yfinance and show quick valuation stats. "
+    "Approximate numbers only."
 )
 
 with st.sidebar:
@@ -75,13 +75,17 @@ if run:
         st.dataframe(pd.DataFrame(core_rows, columns=["Metric", "Value"]).style.format({"Value": "{:,.0f}"}), use_container_width=True)
 
         mult = compute_common_multiples(fin)
-        roic = compute_roic_variants(fin)
+        roic = compute_roic_variants(fin)  # keys: "ROIC" and "ROC_Greenblatt"
 
         st.subheader("Multiples / Yields")
         st.dataframe(pd.DataFrame(mult.items(), columns=["Multiple", "Value"]).style.format({"Value": "{:,.2f}"}), use_container_width=True)
 
         st.subheader("Returns on Capital")
-        st.dataframe(pd.DataFrame(roic.items(), columns=["Metric", "Value"]).style.format({"Value": "{:,.2%}"}), use_container_width=True)
+        roic_rows = [
+            ("ROIC (NOPAT / Invested Capital)", roic.get("ROIC")),
+            ("ROC (Greenblatt: EBIT / (NWC + Net PPE))", roic.get("ROC_Greenblatt")),
+        ]
+        st.dataframe(pd.DataFrame(roic_rows, columns=["Metric", "Value"]).style.format({"Value": "{:,.2%}"}), use_container_width=True)
 
         st.subheader(f"Lens Verdict — {lens_name}")
         verdict = run_lens(lens_name, fin, mult, roic)
@@ -101,7 +105,7 @@ if run:
                     st.write("• " + n)
 
         st.caption(
-            "Data via yfinance. TTM values are last four quarters; MRQ balances. "
+            "Data via yfinance. TTM = last four quarters; MRQ balances. "
             "Invested Capital ≈ Debt + Equity − Cash; Magic Formula capital = NWC + Net PPE. "
             "Educational; not investment advice."
         )
