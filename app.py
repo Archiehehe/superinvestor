@@ -1,4 +1,5 @@
 # app.py
+import math
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,45 +8,44 @@ from metrics import fetch_core_financials, compute_common_multiples, compute_roi
 from lenses import burry_lens, greenblatt_lens, buffett_lens, klarman_lens, einhorn_lens
 
 st.set_page_config(page_title="Superinvestor Screener", layout="centered")
-
 st.title("🧠 Superinvestor Screener")
-st.write(
-    "Type a ticker and choose a lens. We fetch TTM/MRQ numbers via yfinance and show quick valuation stats. "
-    "Approximate numbers only."
-)
+st.write("Type a ticker and choose a lens. Approximate numbers via yfinance.")
+
+# -------- formatting helpers --------
+def _isnan(x): return isinstance(x, float) and np.isnan(x)
+def fmt_money_short(x):
+    try:
+        if x is None or _isnan(float(x)): return "—"
+        neg = float(x) < 0
+        v = abs(float(x))
+        s = f"{v/1e12:.1f}T" if v>=1e12 else f"{v/1e9:.1f}B" if v>=1e9 else f"{v/1e6:.1f}M" if v>=1e6 else f"{v:,.0f}"
+        return f"-{s}" if neg else s
+    except Exception:
+        return "—"
+def fmt_ratio(x): return "—" if (x is None or _isnan(float(x))) else f"{float(x):.2f}"
+# ------------------------------------
 
 with st.sidebar:
     st.header("⚙️ Controls")
     ticker = st.text_input("Ticker", value="AAPL").strip().upper()
     lens_name = st.selectbox(
         "Investor Lens",
-        [
-            "Burry (EV/EBITDA)",
-            "Greenblatt (Magic Formula)",
-            "Buffett (Owner Earnings / ROIC)",
-            "Klarman (Asset / MoS)",
-            "Einhorn (Relative Value)",
-        ],
+        ["Burry (EV/EBITDA)","Greenblatt (Magic Formula)","Buffett (Owner Earnings / ROIC)","Klarman (Asset / MoS)","Einhorn (Relative Value)"],
         index=0,
     )
     run = st.button("Run Analysis", use_container_width=True)
 
-@st.cache_data(show_spinner=False, ttl=3600)
+@st.cache_data(show_spinner=False, ttl=1800)
 def _cached_financials(t: str) -> dict:
     return fetch_core_financials(t)
 
-def run_lens(name: str, fin: dict, mult: dict, roic: dict) -> dict:
-    if name.startswith("Burry"):
-        return burry_lens(fin, mult, roic)
-    if name.startswith("Greenblatt"):
-        return greenblatt_lens(fin, mult, roic)
-    if name.startswith("Buffett"):
-        return buffett_lens(fin, mult, roic)
-    if name.startswith("Klarman"):
-        return klarman_lens(fin, mult, roic)
-    if name.startswith("Einhorn"):
-        return einhorn_lens(fin, mult, roic)
-    return {"verdict": "N/A", "score": np.nan, "checks": {}, "notes": ["Unknown lens"]}
+def _run_lens(name, fin, mult, roic):
+    if name.startswith("Burry"): return burry_lens(fin, mult, roic)
+    if name.startswith("Greenblatt"): return greenblatt_lens(fin, mult, roic)
+    if name.startswith("Buffett"): return buffett_lens(fin, mult, roic)
+    if name.startswith("Klarman"): return klarman_lens(fin, mult, roic)
+    if name.startswith("Einhorn"): return einhorn_lens(fin, mult, roic)
+    return {"verdict":"N/A","score":np.nan,"checks":{},"notes":["Unknown lens"]}
 
 if run:
     if not ticker:
@@ -55,7 +55,7 @@ if run:
             fin = _cached_financials(ticker)
 
         st.subheader(f"Core Metrics — {ticker}")
-        core_rows = [
+        core = [
             ("Market Cap", fin["Market_Cap"]),
             ("Enterprise Value", fin["EV"]),
             ("Revenue (TTM)", fin["Revenue_TTM"]),
@@ -72,42 +72,41 @@ if run:
             ("Net PPE (MRQ)", fin["NetPPE_MRQ"]),
             ("Tax Rate (est)", fin["Tax_Rate_est"]),
         ]
-        st.dataframe(pd.DataFrame(core_rows, columns=["Metric", "Value"]).style.format({"Value": "{:,.0f}"}), use_container_width=True)
+        df = pd.DataFrame(core, columns=["Metric","Value"])
+        df["Value"] = [
+            (f"{v:.0%}" if k=="Tax Rate (est)" and not _isnan(v) else fmt_money_short(v) if k!="Tax Rate (est)" else "—")
+            for k,v in zip(df["Metric"], df["Value"])
+        ]
+        st.dataframe(df, use_container_width=True)
 
         mult = compute_common_multiples(fin)
-        roic = compute_roic_variants(fin)  # keys: "ROIC" and "ROC_Greenblatt"
+        roic = compute_roic_variants(fin)
 
         st.subheader("Multiples / Yields")
-        st.dataframe(pd.DataFrame(mult.items(), columns=["Multiple", "Value"]).style.format({"Value": "{:,.2f}"}), use_container_width=True)
+        mdf = pd.DataFrame(mult.items(), columns=["Multiple","Value"])
+        mdf["Value"] = mdf["Value"].apply(fmt_ratio)
+        st.dataframe(mdf, use_container_width=True)
 
         st.subheader("Returns on Capital")
-        roic_rows = [
-            ("ROIC (NOPAT / Invested Capital)", roic.get("ROIC")),
-            ("ROC (Greenblatt: EBIT / (NWC + Net PPE))", roic.get("ROC_Greenblatt")),
-        ]
-        st.dataframe(pd.DataFrame(roic_rows, columns=["Metric", "Value"]).style.format({"Value": "{:,.2%}"}), use_container_width=True)
+        rdf = pd.DataFrame(
+            [("ROIC (NOPAT / Invested Capital)", roic.get("ROIC")),
+             ("ROC (Greenblatt: EBIT / (NWC + Net PPE))", roic.get("ROC_Greenblatt"))],
+            columns=["Metric","Value"]
+        )
+        rdf["Value"] = rdf["Value"].apply(lambda x: "—" if x is None or _isnan(x) else f"{x:.2%}")
+        st.dataframe(rdf, use_container_width=True)
 
         st.subheader(f"Lens Verdict — {lens_name}")
-        verdict = run_lens(lens_name, fin, mult, roic)
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            st.metric("Verdict", verdict.get("verdict", "N/A"))
+        verdict = _run_lens(lens_name, fin, mult, roic)
+        c1, c2 = st.columns([1,2])
+        with c1:
+            st.metric("Verdict", verdict.get("verdict","N/A"))
             score = verdict.get("score", np.nan)
             st.metric("Score", "—" if isinstance(score, float) and np.isnan(score) else int(score))
-        with col2:
-            checks_df = pd.DataFrame([{"Check": k, "Pass": "✅" if v else "❌"} for k, v in verdict.get("checks", {}).items()])
-            if not checks_df.empty:
-                st.dataframe(checks_df, use_container_width=True)
+        with c2:
+            checks = pd.DataFrame([{"Check":k,"Pass":"✅" if v else "❌"} for k,v in verdict.get("checks",{}).items()])
+            if not checks.empty: st.dataframe(checks, use_container_width=True)
 
-        if verdict.get("notes"):
-            with st.expander("Notes"):
-                for n in verdict["notes"]:
-                    st.write("• " + n)
-
-        st.caption(
-            "Data via yfinance. TTM = last four quarters; MRQ balances. "
-            "Invested Capital ≈ Debt + Equity − Cash; Magic Formula capital = NWC + Net PPE. "
-            "Educational; not investment advice."
-        )
+        st.caption("TTM=last 4 quarters; MRQ=most recent quarter. Educational; not investment advice.")
 else:
     st.info("Enter a ticker (e.g., AAPL, MSFT, TSLA) and click **Run Analysis**.")
