@@ -11,14 +11,17 @@ st.set_page_config(page_title="Superinvestor Screener", layout="centered")
 st.title("🧠 Superinvestor Screener")
 st.write("Type a ticker and choose a lens. Approximate numbers via yfinance.")
 
-# ----- formatting helpers -----
-def _isnan(x): 
-    try: return isinstance(x, float) and np.isnan(x)
-    except: return False
+# ---------- formatting helpers ----------
+def _isnan(x):
+    try:
+        return isinstance(x, float) and np.isnan(x)
+    except Exception:
+        return False
 
 def fmt_money_short(x: float) -> str:
     try:
-        if x is None or _isnan(float(x)): return "—"
+        if x is None or _isnan(float(x)):
+            return "—"
         neg = float(x) < 0
         v = abs(float(x))
         s = (
@@ -36,7 +39,7 @@ def fmt_ratio(x: float) -> str:
         return "—" if x is None or _isnan(float(x)) else f"{float(x):.2f}"
     except Exception:
         return "—"
-# --------------------------------
+# ----------------------------------------
 
 with st.sidebar:
     st.header("⚙️ Controls")
@@ -59,11 +62,16 @@ def _cached_financials(t: str) -> dict:
     return fetch_core_financials(t)
 
 def run_lens(name: str, fin: dict, mult: dict, roic: dict) -> dict:
-    if name.startswith("Burry"): return burry_lens(fin, mult, roic)
-    if name.startswith("Greenblatt"): return greenblatt_lens(fin, mult, roic)
-    if name.startswith("Buffett"): return buffett_lens(fin, mult, roic)
-    if name.startswith("Klarman"): return klarman_lens(fin, mult, roic)
-    if name.startswith("Einhorn"): return einhorn_lens(fin, mult, roic)
+    if name.startswith("Burry"):
+        return burry_lens(fin, mult, roic)
+    if name.startswith("Greenblatt"):
+        return greenblatt_lens(fin, mult, roic)
+    if name.startswith("Buffett"):
+        return buffett_lens(fin, mult, roic)
+    if name.startswith("Klarman"):
+        return klarman_lens(fin, mult, roic)
+    if name.startswith("Einhorn"):
+        return einhorn_lens(fin, mult, roic)
     return {"verdict": "N/A", "score": np.nan, "checks": {}, "notes": ["Unknown lens"]}
 
 if run:
@@ -77,11 +85,11 @@ if run:
         fin_ccy = fin.get("Currency_Financial", mkt_ccy)
         fx = fin.get("FX_fin_to_market", 1.0)
 
-        st.subheader(f"Core Metrics — {ticker}")
+        st.subheader(f"Core Metrics - {ticker}")
         core_rows = [
             ("Market currency", mkt_ccy),
             ("Financial currency", fin_ccy),
-            ("FX (fin→market)", f"{fx:.4f}" if not _isnan(fx) else "—"),
+            ("FX (fin->market)", f"{fx:.4f}" if not _isnan(fx) else "—"),
             ("Market Cap", fin["Market_Cap"]),
             ("Enterprise Value", fin["EV"]),
             ("Revenue (TTM)", fin["Revenue_TTM"]),
@@ -99,14 +107,13 @@ if run:
             ("Tax Rate (est)", fin["Tax_Rate_est"]),
         ]
         core_df = pd.DataFrame(core_rows, columns=["Metric", "Value"])
-        # format money-like rows
         def _fmt_row(metric, val):
-            if metric in ("Market currency", "Financial currency", "FX (fin→market)"):
+            if metric in ("Market currency", "Financial currency", "FX (fin->market)"):
                 return val
             if metric == "Tax Rate (est)":
                 return "—" if _isnan(val) else f"{val:.0%}"
             return fmt_money_short(val)
-        core_df["Value"] = [ _fmt_row(m, v) for m,v in zip(core_df["Metric"], core_df["Value"]) ]
+        core_df["Value"] = [_fmt_row(m, v) for m, v in zip(core_df["Metric"], core_df["Value"])]
         st.dataframe(core_df, use_container_width=True)
 
         mult = compute_common_multiples(fin)
@@ -126,4 +133,22 @@ if run:
         roic_df["Value"] = roic_df["Value"].apply(lambda x: "—" if _isnan(x) else f"{x:.2%}")
         st.dataframe(roic_df, use_container_width=True)
 
-        st.subheader(f"Lens Verdict — {lens_n_
+        # <<< this is the line that broke before >>> 
+        st.subheader(f"Lens Verdict - {lens_name}")
+
+        verdict = run_lens(lens_name, fin, mult, roic)
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.metric("Verdict", verdict.get("verdict", "N/A"))
+            score = verdict.get("score", np.nan)
+            st.metric("Score", "—" if isinstance(score, float) and np.isnan(score) else int(score))
+        with col2:
+            checks_df = pd.DataFrame(
+                [{"Check": k, "Pass": "✅" if v else "❌"} for k, v in verdict.get("checks", {}).items()]
+            )
+            if not checks_df.empty:
+                st.dataframe(checks_df, use_container_width=True)
+
+        st.caption("TTM=last 4 quarters; MRQ=most recent quarter. Statements are converted into the market currency if needed.")
+else:
+    st.info("Enter a ticker (e.g., AAPL, MSFT, TSLA) and click Run Analysis.")
