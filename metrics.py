@@ -237,4 +237,179 @@ def fetch_core_financials(ticker: str) -> Dict[str, float]:
     market_ccy, fin_ccy = _currencies(t)
     fx = _fx_rate(fin_ccy, market_ccy)
 
-    # market cap (robust) in marke
+    # market cap (robust) in market currency
+    mc = _market_cap_robust(t, q_is)
+
+    # Income statement (TTM) in financial currency -> convert to market currency
+    revenue_ttm_fc = _ttm_sum(q_is, "Total Revenue", "Revenue", "TotalRevenue")
+    ebit_ttm_fc = _ttm_sum(q_is, "EBIT", "Ebit", "Operating Income", "OperatingIncome")
+    dep_ttm_fc = _ttm_sum(q_is, "Depreciation And Amortization", "Depreciation", "Depreciation & Amortization", "Reconciled Depreciation")
+    ebitda_ttm_fc = _ttm_sum(q_is, "EBITDA", "Ebitda", "EBITDA (ttm)")
+
+    if math.isnan(ebit_ttm_fc) and not math.isnan(ebitda_ttm_fc) and not math.isnan(dep_ttm_fc):
+        ebit_ttm_fc = float(ebitda_ttm_fc - dep_ttm_fc)
+    if math.isnan(ebitda_ttm_fc) and not math.isnan(ebit_ttm_fc) and not math.isnan(dep_ttm_fc):
+        ebitda_ttm_fc = float(ebit_ttm_fc + dep_ttm_fc)
+
+    # Cash flow (TTM) — CapEx is usually NEGATIVE -> normalize then FCF = CFO + CapEx
+    cfo_ttm_fc = _ttm_sum(
+        q_cf,
+        "Total Cash From Operating Activities",
+        "Operating Cash Flow",
+        "OperatingCashFlow",
+        "NetCashProvidedByOperatingActivities",
+        "Net Cash Provided By Operating Activities",
+    )
+    capex_ttm_fc = _ttm_sum(
+        q_cf,
+        "Capital Expenditures",
+        "Capital Expenditure",
+        "Purchase Of Property And Equipment",
+        "Purchases Of Property And Equipment",
+        "Investment In Property Plant And Equipment",
+        "Investments In Property Plant And Equipment",
+        "Additions To Property Plant And Equipment",
+    )
+    if not math.isnan(capex_ttm_fc):
+        capex_ttm_fc = -abs(capex_ttm_fc)  # force negative
+
+    # Balance sheet (MRQ) in financial currency
+    total_debt_fc = _mrq_value(q_bs, "Total Debt", "TotalDebt")
+    if math.isnan(total_debt_fc):
+        lt = _mrq_value(q_bs, "Long Term Debt", "LongTermDebt", "Long Term Debt Noncurrent")
+        st = _mrq_value(q_bs, "Short Long Term Debt", "ShortTermDebt", "Current Debt", "Current Portion Of Long Term Debt")
+        total_debt_fc = (0.0 if math.isnan(lt) else lt) + (0.0 if math.isnan(st) else st)
+
+    cash_fc = _mrq_value(q_bs, "Cash And Cash Equivalents", "Cash", "CashAndCashEquivalents")
+    equity_fc = _mrq_value(q_bs, "Total Stockholder Equity", "Stockholders Equity", "Total Equity Gross Minority Interest", "totalStockholdersEquity")
+
+    cur_assets_fc = _mrq_value(q_bs, "Total Current Assets", "Current Assets", "CurrentAssets")
+    cur_liabilities_fc = _mrq_value(q_bs, "Total Current Liabilities", "Current Liabilities", "CurrentLiabilities")
+    short_term_debt_fc = _mrq_value(q_bs, "Short Long Term Debt", "ShortTermDebt", "Current Debt")
+    net_ppe_fc = _mrq_value(q_bs, "Property Plant Equipment Net", "Net PPE", "PPENet", "NetPropertyPlantAndEquipment")
+
+    # Convert all FC amounts into MARKET currency
+    revenue_ttm = _conv(revenue_ttm_fc, fx)
+    ebit_ttm = _conv(ebit_ttm_fc, fx)
+    dep_ttm = _conv(dep_ttm_fc, fx)
+    ebitda_ttm = _conv(ebitda_ttm_fc, fx)
+    cfo_ttm = _conv(cfo_ttm_fc, fx)
+    capex_ttm = _conv(capex_ttm_fc, fx)
+    total_debt = _conv(total_debt_fc, fx)
+    cash = _conv(cash_fc, fx)
+    equity = _conv(equity_fc, fx)
+    cur_assets = _conv(cur_assets_fc, fx)
+    cur_liab = _conv(cur_liabilities_fc, fx)
+    std = _conv(short_term_debt_fc, fx)
+    net_ppe = _conv(net_ppe_fc, fx)
+
+    # FCF (market currency)
+    fcf_ttm = float("nan")
+    if not math.isnan(cfo_ttm) and not math.isnan(capex_ttm):
+        fcf_ttm = float(cfo_ttm + capex_ttm)
+
+    # Non-cash NWC
+    ncwc = float("nan")
+    if not math.isnan(cur_assets) and not math.isnan(cur_liab):
+        cash0 = 0.0 if math.isnan(cash) else cash
+        std0 = 0.0 if math.isnan(std) else std
+        ncwc = (cur_assets - cash0) - (cur_liab - std0)
+
+    # EV — keep numbers in market currency; treat missing debt/cash as 0
+    ev = float("nan")
+    if not math.isnan(mc):
+        ev = float(mc + (0.0 if math.isnan(total_debt) else total_debt) - (0.0 if math.isnan(cash) else cash))
+    if math.isnan(ev):  # last resort
+        try:
+            info = getattr(t, "info", {}) or {}
+            ev_info = float(info.get("enterpriseValue", np.nan))
+            if not math.isnan(ev_info):
+                ev = ev_info
+        except Exception:
+            pass
+
+    # Tax rate estimate (dimensionless)
+    pretax_fc = _ttm_sum(q_is, "Income Before Tax", "Pretax Income", "Income Before Income Taxes")
+    tax_fc = _ttm_sum(q_is, "Income Tax Expense", "Provision For Income Taxes")
+    tax_rate_est = float("nan")
+    try:
+        base = abs(float(pretax_fc))
+        if base > 0 and not math.isnan(tax_fc):
+            tax_rate_est = max(0.0, min(0.35, float(tax_fc) / base))
+    except Exception:
+        pass
+
+    return {
+        # currency metadata (for UI)
+        "Currency_Market": market_ccy,
+        "Currency_Financial": fin_ccy,
+        "FX_fin_to_market": fx,
+        # valuation base
+        "Market_Cap": mc,
+        "EV": ev,
+        # TTM (market currency)
+        "Revenue_TTM": revenue_ttm,
+        "EBIT_TTM": ebit_ttm,
+        "Dep_TTM": dep_ttm,
+        "EBITDA_TTM": ebitda_ttm,
+        "CFO_TTM": cfo_ttm,
+        "CapEx_TTM": capex_ttm,
+        "FCF_TTM": fcf_ttm,
+        # MRQ (market currency)
+        "Debt_MRQ": total_debt,
+        "Cash_MRQ": cash,
+        "Equity_MRQ": equity,
+        "NWC_MRQ": ncwc,
+        "NetPPE_MRQ": net_ppe,
+        # misc
+        "Tax_Rate_est": tax_rate_est,
+    }
+
+
+def compute_common_multiples(fin: Dict[str, float]) -> Dict[str, float]:
+    ev, ebitda, ebit, sales = (fin.get(k, float("nan")) for k in ("EV", "EBITDA_TTM", "EBIT_TTM", "Revenue_TTM"))
+    mc, fcf = (fin.get(k, float("nan")) for k in ("Market_Cap", "FCF_TTM"))
+    return {
+        "EV/EBITDA": _safe_div(ev, ebitda),
+        "EV/EBIT": _safe_div(ev, ebit),
+        "EV/Sales": _safe_div(ev, sales),
+        "EBIT/EV": _safe_div(ebit, ev),
+        "FCF Yield (to Equity)": _safe_div(fcf, mc),
+        "P/FCF": _safe_div(mc, fcf),
+    }
+
+
+def compute_roic_variants(fin: Dict[str, float]) -> Dict[str, float]:
+    """Return ROIC (NOPAT / Invested Capital) and Greenblatt ROC (EBIT / (NWC + Net PPE))."""
+    ebit = fin.get("EBIT_TTM", float("nan"))
+    tax_rate = fin.get("Tax_Rate_est", float("nan"))
+    if math.isnan(tax_rate):
+        tax_rate = 0.21  # default if unknown
+
+    # NOPAT = EBIT * (1 - tax_rate)
+    nopat = float("nan") if math.isnan(ebit) else float(ebit) * (1 - float(tax_rate))
+
+    # Invested capital ≈ Debt + Equity − Cash (MRQ)
+    debt = fin.get("Debt_MRQ", float("nan"))
+    equity = fin.get("Equity_MRQ", float("nan"))
+    cash = fin.get("Cash_MRQ", float("nan"))
+
+    invested_capital = float("nan")
+    if not math.isnan(debt) or not math.isnan(equity) or not math.isnan(cash):
+        invested_capital = (
+            (0.0 if math.isnan(debt) else debt)
+            + (0.0 if math.isnan(equity) else equity)
+            - (0.0 if math.isnan(cash) else cash)
+        )
+
+    # Greenblatt capital ≈ NWC + Net PPE
+    nwc = fin.get("NWC_MRQ", float("nan"))
+    net_ppe = fin.get("NetPPE_MRQ", float("nan"))
+    magic_formula_capital = float("nan")
+    if not math.isnan(nwc) or not math.isnan(net_ppe):
+        magic_formula_capital = (0.0 if math.isnan(nwc) else nwc) + (0.0 if math.isnan(net_ppe) else net_ppe)
+
+    roic = _safe_div(nopat, invested_capital)
+    roc_greenblatt = _safe_div(ebit, magic_formula_capital)
+
+    return {"ROIC": roic, "ROC_Greenblatt": roc_greenblatt}
