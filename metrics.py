@@ -4,8 +4,6 @@ import math
 from typing import Dict, Iterable, Optional
 import numpy as np
 import pandas as pd
-
-# Use yfinance from requirements (no runtime install)
 import yfinance as yf
 
 def _coalesce_key(index_like: Iterable[str], *candidates: str) -> Optional[str]:
@@ -108,7 +106,6 @@ def fetch_core_financials(ticker: str) -> Dict[str, float]:
     short_term_debt = _mrq_value(q_bs, "Short Long Term Debt", "ShortTermDebt", "Current Debt")
     net_ppe = _mrq_value(q_bs, "Property Plant Equipment Net", "Net PPE", "PPENet", "NetPropertyPlantAndEquipment")
 
-    # Non-cash Net Working Capital (approx)
     ncwc = float("nan")
     if not math.isnan(current_assets) and not math.isnan(current_liabilities):
         cash0 = 0.0 if math.isnan(cash) else cash
@@ -119,7 +116,6 @@ def fetch_core_financials(ticker: str) -> Dict[str, float]:
     if not math.isnan(mc) and (not math.isnan(total_debt) or not math.isnan(cash)):
         ev = float(mc + (0.0 if math.isnan(total_debt) else total_debt) - (0.0 if math.isnan(cash) else cash))
 
-    # Tax rate estimate: clamp 0–35%
     pretax = _ttm_sum(q_is, "Income Before Tax", "Pretax Income", "Income Before Income Taxes")
     tax = _ttm_sum(q_is, "Income Tax Expense", "Provision For Income Taxes")
     tax_rate_est = float("nan")
@@ -176,7 +172,7 @@ def compute_roic_variants(fin: Dict[str, float]) -> Dict[str, float]:
     ebit = fin.get("EBIT_TTM", float("nan"))
     tax_rate = fin.get("Tax_Rate_est", float("nan"))
     if math.isnan(tax_rate):
-        tax_rate = 0.21  # reasonable default if unknown
+        tax_rate = 0.21  # default if unknown
 
     nopat = float("nan") if math.isnan(ebit) else float(ebit) * (1 - float(tax_rate))
 
@@ -196,6 +192,8 @@ def compute_roic_variants(fin: Dict[str, float]) -> Dict[str, float]:
     roic = _safe_div(nopat, invested_capital)
     roc_greenblatt = _safe_div(ebit, magic_formula_capital)
 
+    # Short keys to avoid copy/paste line-wrap bugs
     return {
-        "ROIC (NOPAT / Invested Capital)": roic,
-        "ROC (Greenblatt,
+        "ROIC": roic,
+        "ROC_Greenblatt": roc_greenblatt,
+    }
