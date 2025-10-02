@@ -2,188 +2,244 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Optional
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
+
+# --- Make yfinance robust on Streamlit Cloud ---
+try:
+    import yfinance as yf  # type: ignore
+except ModuleNotFoundError:
+    import subprocess, sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance>=0.2.40"])
+    import yfinance as yf  # type: ignore
+# ------------------------------------------------
 
 
-def _coalesce_key(index_like: Iterable[str], *candidates: str) -> str | None:
-    """Return the first matching key (case-insensitive, ignoring punctuation)."""
+def _coalesce_key(index_like: Iterable[str], *candidates: str) -> Optional[str]:
+    """
+    Return the first matching key in `index_like` (case-insensitive, ignoring punctuation).
+    Useful because yfinance varies field names across tickers/versions.
+    """
     import re
-    norm = lambda s: re.sub(r"[^a-z0-9]+", "", s.lower()) if isinstance(s, str) else ""
-    keys = {norm(k): k for k in index_like}
+
+    def norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", s.lower())
+
+    idx = [norm(x) for x in index_like]
     for cand in candidates:
-        k = norm(cand)
-        if k in keys:
-            return keys[k]
+        n = norm(cand)
+        for raw, nidx in zip(index_like, idx):
+            if nidx == n:
+                return str(raw)
     return None
 
 
-def _get_row(df: pd.DataFrame, *candidates: str) -> pd.Series | None:
-    if df is None or df.empty:
-        return None
-    key = _coalesce_key(df.index, *candidates)
-    return (df.loc[key] if key in df.index else None) if key else None
+def _get_df(t, names: Iterable[str]) -> pd.DataFrame:
+    """Try multiple attribute names to survive yfinance version drift."""
+    for n in names:
+        try:
+            df = getattr(t, n)
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                return df
+        except Exception:
+            pass
+    return pd.DataFrame()
 
 
-def _ttm_sum(df: pd.DataFrame, *candidates: str) -> float:
-    """Sum the last four quarters of the matching row. Returns np.nan if not found."""
-    try:
-        row = _get_row(df, *candidates)
-        if row is None:
-            return float("nan")
-        vals = pd.to_numeric(row[-4:], errors="coerce")
-        return float(vals.sum())
-    except Exception:
+def _ttm_sum(qdf: pd.DataFrame, *label_candidates: str) -> float:
+    """Sum last 4 quarters for the given line item; return NaN if not available."""
+    if qdf is None or qdf.empty:
         return float("nan")
+    label = _coalesce_key(qdf.index, *label_candidates)
+    if label is None:
+        return float("nan")
+    series = qdf.loc[label].dropna().astype(float)
+    if series.empty:
+        return float("nan")
+    return float(series.iloc[:4].sum())
 
 
-def _mrq_value(df: pd.DataFrame, *candidates: str) -> float:
-    """Most-recent quarter value for the matching row."""
+def _mrq_value(qdf: pd.DataFrame, *label_candidates: str) -> float:
+    """Most recent quarter value for the given line item; return NaN if not available."""
+    if qdf is None or qdf.empty:
+        return float("nan")
+    label = _coalesce_key(qdf.index, *label_candidates)
+    if label is None:
+        return float("nan")
+    series = qdf.loc[label].dropna().astype(float)
+    if series.empty:
+        return float("nan")
+    return float(series.iloc[0])
+
+
+def _safe_div(n: float, d: float) -> float:
     try:
-        row = _get_row(df, *candidates)
-        if row is None:
+        if d == 0 or (isinstance(d, float) and math.isnan(d)):
             return float("nan")
-        val = pd.to_numeric(row[-1:], errors="coerce")
-        return float(val.iloc[0])
+        return float(n) / float(d)
     except Exception:
         return float("nan")
 
 
 def fetch_core_financials(ticker: str) -> Dict[str, float]:
-    """Fetch core items and compute derived fields needed for the app."""
+    """
+    Fetch core items and compute derived fields needed for the app.
+    Keys returned (all floats; NaN if unavailable):
+        Market_Cap, EV, Revenue_TTM, EBIT_TTM, Dep_TTM, EBITDA_TTM,
+        CFO_TTM, CapEx_TTM, FCF_TTM, Debt_MRQ, Cash_MRQ, Equity_MRQ,
+        NWC_MRQ, NetPPE_MRQ, Tax_Rate_est
+    """
     t = yf.Ticker(ticker)
 
-    # Price / market cap
-    mc = np.nan
+    # Price / Market cap (fast path; resilient if missing)
+    mc = float("nan")
     try:
         fi = getattr(t, "fast_info", {}) or {}
         mc = float(fi.get("market_cap", np.nan))
     except Exception:
-        mc = np.nan
+        try:
+            info = getattr(t, "info", {}) or {}
+            mc = float(info.get("marketCap", np.nan))
+        except Exception:
+            mc = float("nan")
 
-    # Quarterly statements
+    # Quarterly statements (cover multiple yfinance variants)
+    q_is = _get_df(t, ["quarterly_income_stmt", "quarterly_income_statement", "quarterly_income", "quarterly_financials"])
+    q_bs = _get_df(t, ["quarterly_balance_sheet", "quarterly_balancesheet", "quarterly_balance", "quarterly_balance_sheet"])
+    q_cf = _get_df(t, ["quarterly_cashflow", "quarterly_cash_flow", "quarterly_cashflow_statement"])
+
+    # Income statement (TTM)
+    revenue_ttm = _ttm_sum(q_is, "Total Revenue", "Revenue", "TotalRevenue")
+    ebit_ttm = _ttm_sum(q_is, "EBIT", "Ebit", "Operating Income", "OperatingIncome")
+    dep_ttm = _ttm_sum(q_is, "Depreciation And Amortization", "Depreciation", "Depreciation & Amortization", "Reconciled Depreciation")
+    ebitda_ttm = _ttm_sum(q_is, "EBITDA", "Ebitda", "EBITDA (ttm)")
+
+    # If EBIT or EBITDA missing, try to back into them
+    if math.isnan(ebit_ttm) and not math.isnan(ebitda_ttm) and not math.isnan(dep_ttm):
+        ebit_ttm = float(ebitda_ttm - dep_ttm)
+    if math.isnan(ebitda_ttm) and not math.isnan(ebit_ttm) and not math.isnan(dep_ttm):
+        ebitda_ttm = float(ebit_ttm + dep_ttm)
+
+    # Cash flow (TTM)
+    cfo_ttm = _ttm_sum(q_cf, "Total Cash From Operating Activities", "Operating Cash Flow", "OperatingCashFlow", "NetCashProvidedByOperatingActivities")
+    capex_ttm = _ttm_sum(q_cf, "Capital Expenditures", "CapEx", "capitalExpenditures", "Investments In Property Plant And Equipment")
+    if math.isnan(dep_ttm):
+        dep_ttm = _ttm_sum(q_cf, "Depreciation", "Depreciation And Amortization")
+
+    fcf_ttm = float(cfo_ttm - capex_ttm) if (not math.isnan(cfo_ttm) and not math.isnan(capex_ttm)) else float("nan")
+
+    # Balance sheet (MRQ)
+    # Debt: prefer explicit total debt, else sum components
+    total_debt = _mrq_value(q_bs, "Total Debt", "TotalDebt")
+    if math.isnan(total_debt):
+        lt_debt = _mrq_value(q_bs, "Long Term Debt", "LongTermDebt", "Long Term Debt Noncurrent")
+        st_debt = _mrq_value(q_bs, "Short Long Term Debt", "ShortTermDebt", "Current Debt", "Current Portion Of Long Term Debt")
+        total_debt = float(0.0 if math.isnan(lt_debt) else lt_debt) + float(0.0 if math.isnan(st_debt) else st_debt)
+
+    cash = _mrq_value(q_bs, "Cash And Cash Equivalents", "Cash", "CashAndCashEquivalents")
+    equity = _mrq_value(q_bs, "Total Stockholder Equity", "Stockholders Equity", "Total Equity Gross Minority Interest", "totalStockholdersEquity")
+
+    current_assets = _mrq_value(q_bs, "Total Current Assets", "Current Assets", "CurrentAssets")
+    current_liabilities = _mrq_value(q_bs, "Total Current Liabilities", "Current Liabilities", "CurrentLiabilities")
+    short_term_debt = _mrq_value(q_bs, "Short Long Term Debt", "ShortTermDebt", "Current Debt")
+    net_ppe = _mrq_value(q_bs, "Property Plant Equipment Net", "Net PPE", "PPENet", "NetPropertyPlantAndEquipment")
+
+    # Non-cash Net Working Capital (approx)
+    ncwc = float("nan")
+    if not math.isnan(current_assets) and not math.isnan(current_liabilities):
+        cash0 = 0.0 if math.isnan(cash) else cash
+        std0 = 0.0 if math.isnan(short_term_debt) else short_term_debt
+        ncwc = (current_assets - cash0) - (current_liabilities - std0)
+
+    # Enterprise value
+    ev = float("nan")
+    if not math.isnan(mc) and (not math.isnan(total_debt) or not math.isnan(cash)):
+        ev = float(mc + (0.0 if math.isnan(total_debt) else total_debt) - (0.0 if math.isnan(cash) else cash))
+
+    # Tax rate estimate: clamp 0–35%
+    pretax = _ttm_sum(q_is, "Income Before Tax", "Pretax Income", "Income Before Income Taxes")
+    tax = _ttm_sum(q_is, "Income Tax Expense", "Provision For Income Taxes")
+    tax_rate_est = float("nan")
     try:
-        q_is = t.quarterly_income_stmt or t.quarterly_financials  # fallback alias
+        base = abs(float(pretax))
+        if base > 0 and not math.isnan(tax):
+            tax_rate_est = max(0.0, min(0.35, float(tax) / base))
     except Exception:
-        q_is = pd.DataFrame()
-    try:
-        q_bs = t.quarterly_balance_sheet
-    except Exception:
-        q_bs = pd.DataFrame()
-    try:
-        q_cf = t.quarterly_cashflow
-    except Exception:
-        q_cf = pd.DataFrame()
-
-    # TTM calculations
-    EBIT_ttm = _ttm_sum(q_is, "Operating Income", "EBIT", "Earnings Before Interest And Taxes")
-    Dep_ttm = _ttm_sum(q_cf, "Depreciation And Amortization", "Depreciation", "Depreciation & Amortization")
-    EBITDA_ttm = EBIT_ttm + Dep_ttm if not (math.isnan(EBIT_ttm) or math.isnan(Dep_ttm)) else float("nan")
-    Revenue_ttm = _ttm_sum(q_is, "Total Revenue", "Revenue", "Sales")
-    CFO_ttm = _ttm_sum(q_cf, "Total Cash From Operating Activities", "Operating Cash Flow", "Net Cash Provided By Operating Activities")
-    CapEx_ttm = _ttm_sum(q_cf, "Capital Expenditures", "Investment In Property Plant And Equipment")
-    FCF_ttm = CFO_ttm - CapEx_ttm if not (math.isnan(CFO_ttm) or math.isnan(CapEx_ttm)) else float("nan")
-
-    # MRQ balance sheet items
-    Debt_mrq = _mrq_value(q_bs, "Total Debt", "Short Long Term Debt", "Long Term Debt", "Short Term Debt")
-    Cash_mrq = _mrq_value(q_bs, "Cash And Cash Equivalents", "Cash And Short Term Investments", "Cash Cash Equivalents And Short Term Investments")
-    Equity_mrq = _mrq_value(q_bs, "Total Stockholder Equity", "Total Equity Gross Minority Interest", "Common Stock Equity")
-    CA_mrq = _mrq_value(q_bs, "Total Current Assets", "Current Assets")
-    CL_mrq = _mrq_value(q_bs, "Total Current Liabilities", "Current Liabilities")
-    NetPPE_mrq = _mrq_value(q_bs, "Property Plant Equipment Net", "Net PPE", "Property Plant And Equipment Net")
-
-    NWC_mrq = (CA_mrq - CL_mrq) if not (math.isnan(CA_mrq) or math.isnan(CL_mrq)) else float("nan")
-
-    # Tax rate estimate
-    tax_exp_ttm = _ttm_sum(q_is, "Income Tax Expense", "Provision For Income Taxes")
-    pretax_ttm = _ttm_sum(q_is, "Income Before Tax", "Pretax Income")
-    tax_rate = float("nan")
-    try:
-        if not (math.isnan(tax_exp_ttm) or math.isnan(pretax_ttm)) and pretax_ttm != 0:
-            tax_rate = max(0.0, min(0.35, abs(tax_exp_ttm) / abs(pretax_ttm)))
-        else:
-            tax_rate = 0.21  # fallback
-    except Exception:
-        tax_rate = 0.21
-
-    NOPAT_ttm = EBIT_ttm * (1.0 - tax_rate) if not math.isnan(EBIT_ttm) else float("nan")
-
-    # Enterprise value & invested capital
-    EV = (mc if not math.isnan(mc) else 0.0)          + (0.0 if math.isnan(Debt_mrq) else Debt_mrq)          - (0.0 if math.isnan(Cash_mrq) else Cash_mrq)
-
-    Invested_Capital = (0.0 if math.isnan(Debt_mrq) else Debt_mrq)                        + (0.0 if math.isnan(Equity_mrq) else Equity_mrq)                        - (0.0 if math.isnan(Cash_mrq) else Cash_mrq)
-
-    MF_capital = (0.0 if math.isnan(NWC_mrq) else NWC_mrq) + (0.0 if math.isnan(NetPPE_mrq) else NetPPE_mrq)
+        tax_rate_est = float("nan")
 
     return {
         "Market_Cap": mc,
-        "EV": EV,
-        "Revenue_TTM": Revenue_ttm,
-        "EBIT_TTM": EBIT_ttm,
-        "Dep_TTM": Dep_ttm,
-        "EBITDA_TTM": EBITDA_ttm,
-        "CFO_TTM": CFO_ttm,
-        "CapEx_TTM": CapEx_ttm,
-        "FCF_TTM": FCF_ttm,
-        "Debt_MRQ": Debt_mrq,
-        "Cash_MRQ": Cash_mrq,
-        "Equity_MRQ": Equity_mrq,
-        "NWC_MRQ": NWC_mrq,
-        "NetPPE_MRQ": NetPPE_mrq,
-        "Invested_Capital": Invested_Capital,
-        "MF_capital": MF_capital,
-        "Tax_Rate_est": tax_rate,
-        "NOPAT_TTM": NOPAT_ttm,
+        "EV": ev,
+        "Revenue_TTM": revenue_ttm,
+        "EBIT_TTM": ebit_ttm,
+        "Dep_TTM": dep_ttm,
+        "EBITDA_TTM": ebitda_ttm,
+        "CFO_TTM": cfo_ttm,
+        "CapEx_TTM": capex_ttm,
+        "FCF_TTM": fcf_ttm,
+        "Debt_MRQ": total_debt,
+        "Cash_MRQ": cash,
+        "Equity_MRQ": equity,
+        "NWC_MRQ": ncwc,
+        "NetPPE_MRQ": net_ppe,
+        "Tax_Rate_est": tax_rate_est,
     }
 
 
 def compute_common_multiples(fin: Dict[str, float]) -> Dict[str, float]:
-    EV = fin.get("EV", float("nan"))
-    EBIT = fin.get("EBIT_TTM", float("nan"))
-    EBITDA = fin.get("EBITDA_TTM", float("nan"))
-    Sales = fin.get("Revenue_TTM", float("nan"))
-    MC = fin.get("Market_Cap", float("nan"))
-    FCF = fin.get("FCF_TTM", float("nan"))
+    """Valuation multiples / yields based on `fin` dict produced by `fetch_core_financials`."""
+    ev = fin.get("EV", float("nan"))
+    ebitda = fin.get("EBITDA_TTM", float("nan"))
+    ebit = fin.get("EBIT_TTM", float("nan"))
+    sales = fin.get("Revenue_TTM", float("nan"))
+    mc = fin.get("Market_Cap", float("nan"))
+    fcf = fin.get("FCF_TTM", float("nan"))
 
-    def safe_div(a, b):
-        try:
-            if b is None or (isinstance(b, float) and (math.isnan(b) or b == 0)):
-                return float("nan")
-            return float(a) / float(b)
-        except Exception:
-            return float("nan")
+    ev_ebitda = _safe_div(ev, ebitda)
+    ev_ebit = _safe_div(ev, ebit)
+    ev_sales = _safe_div(ev, sales)
+    ebit_ev = _safe_div(ebit, ev)
+    fcf_yield_equity = _safe_div(fcf, mc)
+    p_to_fcf = _safe_div(mc, fcf)
 
     return {
-        "EV/EBITDA": safe_div(EV, EBITDA),
-        "EV/EBIT": safe_div(EV, EBIT),
-        "EV/Sales": safe_div(EV, Sales),
-        "EBIT/EV": safe_div(EBIT, EV),
-        "FCF Yield (to Equity)": safe_div(FCF, MC),
-        "P/FCF": safe_div(MC, FCF),
+        "EV/EBITDA": ev_ebitda,
+        "EV/EBIT": ev_ebit,
+        "EV/Sales": ev_sales,
+        "EBIT/EV": ebit_ev,
+        "FCF Yield (to Equity)": fcf_yield_equity,
+        "P/FCF": p_to_fcf,
     }
 
 
 def compute_roic_variants(fin: Dict[str, float]) -> Dict[str, float]:
-    EBIT = fin.get("EBIT_TTM", float("nan"))
-    NOPAT = fin.get("NOPAT_TTM", float("nan"))
-    IC = fin.get("Invested_Capital", float("nan"))
-    MF_capital = fin.get("MF_capital", float("nan"))
+    """Return ROIC variants expected by the app."""
+    ebit = fin.get("EBIT_TTM", float("nan"))
+    tax_rate = fin.get("Tax_Rate_est", float("nan"))
+    if math.isnan(tax_rate):
+        tax_rate = 0.21  # reasonable default if unknown
 
-    def safe_div(a, b):
-        try:
-            if b is None or (isinstance(b, float) and (math.isnan(b) or b == 0)):
-                return float("nan")
-            return float(a) / float(b)
-        except Exception:
-            return float("nan")
+    nopat = float("nan") if math.isnan(ebit) else float(ebit) * (1 - float(tax_rate))
 
-    roic_simple = safe_div(NOPAT, IC)
-    roc_magic = safe_div(EBIT, MF_capital)
+    debt = fin.get("Debt_MRQ", float("nan"))
+    equity = fin.get("Equity_MRQ", float("nan"))
+    cash = fin.get("Cash_MRQ", float("nan"))
+    invested_capital = float("nan")
+    if not math.isnan(debt) or not math.isnan(equity) or not math.isnan(cash):
+        invested_capital = (0.0 if math.isnan(debt) else debt) + (0.0 if math.isnan(equity) else equity) - (0.0 if math.isnan(cash) else cash)
+
+    nwc = fin.get("NWC_MRQ", float("nan"))
+    net_ppe = fin.get("NetPPE_MRQ", float("nan"))
+    magic_formula_capital = float("nan")
+    if not math.isnan(nwc) or not math.isnan(net_ppe):
+        magic_formula_capital = (0.0 if math.isnan(nwc) else nwc) + (0.0 if math.isnan(net_ppe) else net_ppe)
+
+    roic = _safe_div(nopat, invested_capital)
+    roc_greenblatt = _safe_div(ebit, magic_formula_capital)
 
     return {
-        "ROIC (NOPAT / Invested Capital)": roic_simple,
-        "ROC (Greenblatt, EBIT / (NWC + Net PPE))": roc_magic,
+        "ROIC (NOPAT / Invested Capital)": roic,
+        "ROC (Greenblatt, EBIT / (NWC + Net PPE))": roc_greenblatt,
     }
