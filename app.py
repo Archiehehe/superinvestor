@@ -121,12 +121,17 @@ with tab1:
                     st.error(f"Failed to fetch data for {ticker}: {e}")
                     st.stop()
 
-            meta = metrics["meta"]
-            valuation = metrics["valuation"]
-            quality = metrics["quality"]
-            growth = metrics["growth"]
-            bs = metrics["balance_sheet"]
-            divs = metrics["dividends"]
+            meta = metrics.get("meta", {})
+            valuation = metrics.get("valuation", {})
+            quality = metrics.get("quality", {})
+            growth = metrics.get("growth", {})
+            bs = metrics.get("balance_sheet", {})
+            # NEW: be robust if dividends block is missing
+            divs = metrics.get("dividends", {}) or {}
+            if "dividend_yield" not in divs:
+                divs["dividend_yield"] = float("nan")
+            if "payout_ratio" not in divs:
+                divs["payout_ratio"] = float("nan")
 
             # ----- Stock summary -----
             st.subheader(f"{meta.get('short_name') or ticker} ({ticker})")
@@ -167,13 +172,13 @@ with tab1:
                                 "PEG",
                             ],
                             "Value": [
-                                _fmt_num(valuation["pe"]),
-                                _fmt_num(valuation["pb"]),
-                                _fmt_num(valuation["ev_ebitda"]),
-                                _fmt_num(valuation["ev_sales"]),
-                                _fmt_num(valuation["earnings_yield"], pct=True),
-                                _fmt_num(valuation["fcf_yield"], pct=True),
-                                _fmt_num(valuation["peg"]),
+                                _fmt_num(valuation.get("pe")),
+                                _fmt_num(valuation.get("pb")),
+                                _fmt_num(valuation.get("ev_ebitda")),
+                                _fmt_num(valuation.get("ev_sales")),
+                                _fmt_num(valuation.get("earnings_yield"), pct=True),
+                                _fmt_num(valuation.get("fcf_yield"), pct=True),
+                                _fmt_num(valuation.get("peg")),
                             ],
                         }
                     )
@@ -194,14 +199,14 @@ with tab1:
                                 "Earnings Growth",
                             ],
                             "Value": [
-                                _fmt_num(quality["roe"], pct=True),
-                                _fmt_num(quality["roa"], pct=True),
-                                _fmt_num(quality["gross_margin"], pct=True),
-                                _fmt_num(quality["op_margin"], pct=True),
-                                _fmt_num(quality["net_margin"], pct=True),
-                                _fmt_num(quality["fcf_conversion"], pct=True),
-                                _fmt_num(growth["revenue_growth"], pct=True),
-                                _fmt_num(growth["earnings_growth"], pct=True),
+                                _fmt_num(quality.get("roe"), pct=True),
+                                _fmt_num(quality.get("roa"), pct=True),
+                                _fmt_num(quality.get("gross_margin"), pct=True),
+                                _fmt_num(quality.get("op_margin"), pct=True),
+                                _fmt_num(quality.get("net_margin"), pct=True),
+                                _fmt_num(quality.get("fcf_conversion"), pct=True),
+                                _fmt_num(growth.get("revenue_growth"), pct=True),
+                                _fmt_num(growth.get("earnings_growth"), pct=True),
                             ],
                         }
                     )
@@ -220,12 +225,12 @@ with tab1:
                                 "Payout Ratio",
                             ],
                             "Value": [
-                                _fmt_num(bs["debt_to_equity"]),
-                                _fmt_num(bs["current_ratio"]),
-                                _fmt_num(bs["quick_ratio"]),
-                                _fmt_num(bs["interest_coverage"]),
-                                _fmt_num(divs["dividend_yield"], pct=True),
-                                _fmt_num(divs["payout_ratio"], pct=True),
+                                _fmt_num(bs.get("debt_to_equity")),
+                                _fmt_num(bs.get("current_ratio")),
+                                _fmt_num(bs.get("quick_ratio")),
+                                _fmt_num(bs.get("interest_coverage")),
+                                _fmt_num(divs.get("dividend_yield"), pct=True),
+                                _fmt_num(divs.get("payout_ratio"), pct=True),
                             ],
                         }
                     )
