@@ -41,8 +41,10 @@ def graham_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
 
     notes: List[str] = []
     score = 0.0
+    used = 0
 
     if not _is_nan(pe):
+        used += 1
         notes.append(f"P/E ≈ {pe:,.1f}")
         if pe <= 15:
             score += 30
@@ -53,6 +55,7 @@ def graham_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("P/E not available")
 
     if not _is_nan(pb):
+        used += 1
         notes.append(f"P/B ≈ {pb:,.1f}")
         if pb <= 1.5:
             score += 30
@@ -63,6 +66,7 @@ def graham_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("P/B not available")
 
     if not _is_nan(pe) and not _is_nan(pb):
+        used += 1
         prod = pe * pb
         notes.append(f"P/E × P/B ≈ {prod:,.1f}")
         if prod <= 22.5:
@@ -72,6 +76,7 @@ def graham_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
             notes.append("P/E × P/B > 22.5 ❌")
 
     if not _is_nan(debt_to_equity):
+        used += 1
         notes.append(f"Debt/Equity ≈ {debt_to_equity:,.2f}")
         if debt_to_equity <= 0.5:
             score += 10
@@ -85,6 +90,7 @@ def graham_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("Debt/Equity not available")
 
     if not _is_nan(current_ratio):
+        used += 1
         notes.append(f"Current Ratio ≈ {current_ratio:,.2f}")
         if current_ratio >= 2.0:
             score += 10
@@ -96,6 +102,14 @@ def graham_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
             notes.append("Current ratio < 1.5 ❌")
     else:
         notes.append("Current ratio not available")
+
+    if used == 0:
+        return {
+            "score": float("nan"),
+            "verdict": "Insufficient data from Yahoo Finance for Graham-style check.",
+            "notes": notes,
+            "subscores": {},
+        }
 
     verdict = "Speculative / Not classic Graham value"
     if score >= 70:
@@ -127,8 +141,10 @@ def buffett_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
 
     notes: List[str] = []
     score = 0.0
+    used = 0
 
     if not _is_nan(roe):
+        used += 1
         notes.append(f"ROE ≈ {roe*100:,.1f}%")
         if roe >= 0.20:
             score += 25
@@ -145,6 +161,7 @@ def buffett_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("ROE not available")
 
     if not _is_nan(gross_margin):
+        used += 1
         notes.append(f"Gross margin ≈ {gross_margin*100:,.1f}%")
         if gross_margin >= 0.4:
             score += 10
@@ -153,6 +170,7 @@ def buffett_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("Gross margin not available")
 
     if not _is_nan(op_margin):
+        used += 1
         notes.append(f"Operating margin ≈ {op_margin*100:,.1f}%")
         if op_margin >= 0.20:
             score += 10
@@ -161,6 +179,7 @@ def buffett_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("Operating margin not available")
 
     if not _is_nan(fcf_conv):
+        used += 1
         notes.append(f"FCF / Net income ≈ {fcf_conv*100:,.1f}%")
         if 0.8 <= fcf_conv <= 1.2:
             score += 10
@@ -169,6 +188,7 @@ def buffett_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("FCF / Net income not available")
 
     if not _is_nan(debt_to_equity):
+        used += 1
         notes.append(f"Debt/Equity ≈ {debt_to_equity:,.2f}")
         if debt_to_equity <= 0.5:
             score += 15
@@ -182,6 +202,7 @@ def buffett_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("Debt/Equity not available")
 
     if not _is_nan(pe):
+        used += 1
         notes.append(f"P/E ≈ {pe:,.1f}")
         if pe <= 20:
             score += 10
@@ -193,6 +214,14 @@ def buffett_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
             notes.append("Very expensive relative to earnings ❌")
     else:
         notes.append("P/E not available")
+
+    if used == 0:
+        return {
+            "score": float("nan"),
+            "verdict": "Insufficient data from Yahoo Finance for Buffett-style check.",
+            "notes": notes,
+            "subscores": {},
+        }
 
     verdict = "Not obviously a Buffett-style compounder"
     if score >= 70:
@@ -220,9 +249,11 @@ def lynch_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
 
     notes: List[str] = []
     score = 0.0
+    used = 0
 
     growth_display = earn_g if not _is_nan(earn_g) else rev_g
     if not _is_nan(growth_display):
+        used += 1
         notes.append(f"Growth ≈ {growth_display*100:,.1f}%")
         if growth_display >= 0.15:
             score += 25
@@ -239,11 +270,13 @@ def lynch_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("Growth not available")
 
     if not _is_nan(pe):
+        used += 1
         notes.append(f"P/E ≈ {pe:,.1f}")
     else:
         notes.append("P/E not available")
 
     if not _is_nan(peg):
+        used += 1
         notes.append(f"PEG ≈ {peg:,.2f}")
         if peg <= 1.0:
             score += 25
@@ -257,6 +290,7 @@ def lynch_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("PEG not available")
 
     if not _is_nan(debt_to_equity):
+        used += 1
         notes.append(f"Debt/Equity ≈ {debt_to_equity:,.2f}")
         if debt_to_equity <= 0.5:
             score += 10
@@ -268,6 +302,14 @@ def lynch_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
             notes.append("High leverage ❌")
     else:
         notes.append("Debt/Equity not available")
+
+    if used == 0:
+        return {
+            "score": float("nan"),
+            "verdict": "Insufficient data from Yahoo Finance for Lynch-style check.",
+            "notes": notes,
+            "subscores": {},
+        }
 
     verdict = "Not obviously a Lynch-style GARP stock"
     if score >= 60:
@@ -293,8 +335,10 @@ def greenblatt_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
 
     notes: List[str] = []
     score = 0.0
+    used = 0
 
     if not _is_nan(earnings_yield):
+        used += 1
         ey_pct = earnings_yield * 100
         notes.append(f"Earnings yield ≈ {ey_pct:,.1f}%")
         if ey_pct >= 15:
@@ -306,6 +350,7 @@ def greenblatt_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         else:
             notes.append("Earnings yield < 8% ❌")
     elif not _is_nan(ev_ebitda):
+        used += 1
         notes.append(f"EV/EBITDA ≈ {ev_ebitda:,.1f}")
         if ev_ebitda <= 8:
             score += 20
@@ -316,6 +361,7 @@ def greenblatt_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("Earnings yield / EV multiples not available")
 
     if not _is_nan(roe):
+        used += 1
         notes.append(f"ROE ≈ {roe*100:,.1f}%")
         if roe >= 0.20:
             score += 30
@@ -327,6 +373,14 @@ def greenblatt_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
             notes.append("ROE < 15% ❌")
     else:
         notes.append("ROE (ROC proxy) not available")
+
+    if used == 0:
+        return {
+            "score": float("nan"),
+            "verdict": "Insufficient data from Yahoo Finance for Greenblatt-style check.",
+            "notes": notes,
+            "subscores": {},
+        }
 
     verdict = "Not clearly a Magic Formula standout"
     if score >= 60:
@@ -353,8 +407,10 @@ def burry_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
 
     notes: List[str] = []
     score = 0.0
+    used = 0
 
     if not _is_nan(fcf_yield):
+        used += 1
         fcf_yield_pct = fcf_yield * 100
         notes.append(f"FCF yield ≈ {fcf_yield_pct:,.1f}%")
         if fcf_yield_pct >= 10:
@@ -369,6 +425,7 @@ def burry_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("FCF yield not available")
 
     if not _is_nan(ev_ebitda):
+        used += 1
         notes.append(f"EV/EBITDA ≈ {ev_ebitda:,.1f}")
         if ev_ebitda <= 8:
             score += 15
@@ -379,6 +436,7 @@ def burry_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         else:
             notes.append("EV/EBITDA > 10 ❌")
     elif not _is_nan(pe):
+        used += 1
         notes.append(f"P/E ≈ {pe:,.1f}")
         if pe <= 10:
             score += 10
@@ -387,6 +445,7 @@ def burry_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("Valuation multiples unavailable")
 
     if not _is_nan(debt_to_equity):
+        used += 1
         notes.append(f"Debt/Equity ≈ {debt_to_equity:,.2f}")
         if debt_to_equity <= 0.5:
             score += 20
@@ -398,6 +457,14 @@ def burry_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
             notes.append("High leverage ❌")
     else:
         notes.append("Debt/Equity not available")
+
+    if used == 0:
+        return {
+            "score": float("nan"),
+            "verdict": "Insufficient data from Yahoo Finance for Burry-style check.",
+            "notes": notes,
+            "subscores": {},
+        }
 
     verdict = "Not a classic Burry-style deep value"
     if score >= 65:
