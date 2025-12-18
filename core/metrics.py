@@ -30,7 +30,7 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
     history = raw.get("history")
     if history is None:
         history = pd.DataFrame()
-    # at this point history is always a DataFrame (maybe empty)
+    # history is always a DataFrame (maybe empty)
 
     # ----- Basic price / size -----
     price = info.get("currentPrice")
@@ -46,29 +46,37 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         market_cap = price * shares_out
 
     enterprise_value = info.get("enterpriseValue")
+
+    # Try to use direct PE first, then fall back to our own calc
+    pe = info.get("trailingPE")
+    if pe is None:
+        net_income = (
+            info.get("netIncomeToCommon")
+            or info.get("netIncome")
+            or info.get("profit")
+        )
+        if net_income:
+            pe = _safe_div(market_cap, net_income)
+    if pe is None:
+        pe = float("nan")
+
+    pb = info.get("priceToBook", float("nan"))
+
     ebitda = info.get("ebitda")
     total_revenue = info.get("totalRevenue")
-    net_income = (
-        info.get("netIncomeToCommon")
-        or info.get("netIncome")
-        or info.get("profit")
-    )
     free_cash_flow = info.get("freeCashflow")
-
-    # ----- Valuation metrics -----
-    pe = _safe_div(market_cap, net_income) if net_income else float("nan")
-    pb = info.get("priceToBook", float("nan"))
 
     ev_ebitda = _safe_div(enterprise_value, ebitda) if ebitda else float("nan")
     ev_sales = _safe_div(enterprise_value, total_revenue) if total_revenue else float(
         "nan"
     )
 
-    earnings_yield = (
-        _safe_div(net_income, enterprise_value)
-        if (net_income and enterprise_value)
-        else float("nan")
-    )
+    # Earnings yield: prefer 1 / P/E if we have it
+    if pe and not np.isnan(pe) and pe > 0:
+        earnings_yield = 1.0 / float(pe)
+    else:
+        earnings_yield = float("nan")
+
     fcf_yield = (
         _safe_div(free_cash_flow, market_cap)
         if (free_cash_flow and market_cap)
@@ -82,7 +90,12 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
     op_margin = info.get("operatingMargins", float("nan"))
     net_margin = info.get("profitMargins", float("nan"))
 
-    # FCF / Net income "cash conversion"
+    net_income = (
+        info.get("netIncomeToCommon")
+        or info.get("netIncome")
+        or info.get("profit")
+    )
+
     fcf_conversion = (
         _safe_div(free_cash_flow, net_income)
         if (free_cash_flow and net_income)
@@ -123,7 +136,7 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
             "industry": info.get("industry"),
         },
         "valuation": {
-            "pe": pe,
+            "pe": float(pe),
             "pb": pb,
             "ev_ebitda": ev_ebitda,
             "ev_sales": ev_sales,
