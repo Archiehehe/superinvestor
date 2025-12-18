@@ -725,6 +725,499 @@ def burry_rules(metrics: Dict[str, Any]) -> Dict[str, Any]:
     return {"summary": summary, "rules": rules}
 
 
+# ---------- Terry Smith (Quality Compounders) ----------
+
+
+def smith_rules(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    roe = _get(metrics, "quality", "roe")
+    gross_margin = _get(metrics, "quality", "gross_margin")
+    net_margin = _get(metrics, "quality", "net_margin")
+    rev_g = _get(metrics, "growth", "revenue_growth")
+    debt_to_equity = _get(metrics, "balance_sheet", "debt_to_equity")
+    pe = _get(metrics, "valuation", "pe")
+
+    rules: List[Dict[str, Any]] = []
+
+    # ROE ≥ 15%
+    if _is_nan(roe):
+        rules.append(
+            _rule(
+                "ROE",
+                "ROE ≥ 15%",
+                roe,
+                "na",
+                "ROE not available.",
+                as_pct=True,
+            )
+        )
+    else:
+        if roe >= 0.20:
+            status, comment = "pass", "Very strong returns on capital."
+        elif roe >= 0.15:
+            status, comment = "pass", "Good returns on capital."
+        elif roe >= 0.10:
+            status, comment = "warn", "Okay but not elite."
+        else:
+            status, comment = "fail", "Weak ROE for Smith-style compounders."
+        rules.append(
+            _rule("ROE", "ROE ≥ 15%", roe, status, comment, as_pct=True)
+        )
+
+    # Gross margin ≥ 50%
+    if _is_nan(gross_margin):
+        rules.append(
+            _rule(
+                "Gross margin",
+                "Gross margin ≥ 50%",
+                gross_margin,
+                "na",
+                "Margin data missing.",
+                as_pct=True,
+            )
+        )
+    else:
+        if gross_margin >= 0.50:
+            status, comment = "pass", "High value-add / pricing power."
+        elif gross_margin >= 0.40:
+            status, comment = "warn", "Okay but not top-tier."
+        else:
+            status, comment = "fail", "Low gross margin for Smith-style quality."
+        rules.append(
+            _rule(
+                "Gross margin",
+                "Gross margin ≥ 50%",
+                gross_margin,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # Net margin ≥ 10%
+    if _is_nan(net_margin):
+        rules.append(
+            _rule(
+                "Net margin",
+                "Net margin ≥ 10%",
+                net_margin,
+                "na",
+                "Net margin missing.",
+                as_pct=True,
+            )
+        )
+    else:
+        if net_margin >= 0.15:
+            status, comment = "pass", "Very strong net margins."
+        elif net_margin >= 0.10:
+            status, comment = "pass", "Healthy net margins."
+        elif net_margin >= 0.07:
+            status, comment = "warn", "Okay margins."
+        else:
+            status, comment = "fail", "Thin profitability."
+        rules.append(
+            _rule(
+                "Net margin",
+                "Net margin ≥ 10%",
+                net_margin,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # Revenue growth ≥ 5%
+    if _is_nan(rev_g):
+        rules.append(
+            _rule(
+                "Revenue growth",
+                "Growth ≥ 5%",
+                rev_g,
+                "na",
+                "Growth data missing.",
+                as_pct=True,
+            )
+        )
+    else:
+        if rev_g >= 0.10:
+            status, comment = "pass", "Solid top-line growth."
+        elif rev_g >= 0.05:
+            status, comment = "pass", "Reasonable growth."
+        elif rev_g >= 0.0:
+            status, comment = "warn", "Flat-ish revenue."
+        else:
+            status, comment = "fail", "Shrinking business."
+        rules.append(
+            _rule(
+                "Revenue growth",
+                "Growth ≥ 5%",
+                rev_g,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # Debt/Equity ≤ 0.5 (≤1.0 warning)
+    if _is_nan(debt_to_equity):
+        rules.append(
+            _rule(
+                "Leverage",
+                "Debt/Equity ≤ 0.5",
+                debt_to_equity,
+                "na",
+                "Leverage data missing.",
+            )
+        )
+    else:
+        if debt_to_equity <= 0.5:
+            status, comment = "pass", "Balance sheet fits quality style."
+        elif debt_to_equity <= 1.0:
+            status, comment = "warn", "Some leverage but manageable."
+        else:
+            status, comment = "fail", "Too much leverage for Smith style."
+        rules.append(
+            _rule("Leverage", "Debt/Equity ≤ 0.5", debt_to_equity, status, comment)
+        )
+
+    # P/E guardrail: ≤ 30
+    if _is_nan(pe):
+        rules.append(
+            _rule(
+                "Valuation",
+                "P/E ≤ 30",
+                pe,
+                "na",
+                "P/E not available.",
+            )
+        )
+    else:
+        if pe <= 25:
+            status, comment = "pass", "Valuation broadly reasonable for quality."
+        elif pe <= 35:
+            status, comment = "warn", "Stretch valuation."
+        else:
+            status, comment = "fail", "Very rich for Smith style."
+        rules.append(_rule("Valuation", "P/E ≤ 30–35", pe, status, comment))
+
+    summary = _summary_from_rules(rules, "Smith-style quality")
+    return {"summary": summary, "rules": rules}
+
+
+# ---------- Dividend Investor (Income Quality) ----------
+
+
+def dividend_rules(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    div_yield = _get(metrics, "dividends", "dividend_yield")
+    payout = _get(metrics, "dividends", "payout_ratio")
+    fcf_yield = _get(metrics, "valuation", "fcf_yield")
+    debt_to_equity = _get(metrics, "balance_sheet", "debt_to_equity")
+    earnings_growth = _get(metrics, "growth", "earnings_growth")
+
+    rules: List[Dict[str, Any]] = []
+
+    # Dividend yield between ~2% and 8%
+    if _is_nan(div_yield):
+        rules.append(
+            _rule(
+                "Dividend yield",
+                "Target 2–8%",
+                div_yield,
+                "na",
+                "Dividend yield not available.",
+                as_pct=True,
+            )
+        )
+    else:
+        if 0.02 <= div_yield <= 0.08:
+            status, comment = "pass", "Comfortable income range."
+        elif div_yield < 0.02:
+            status, comment = "warn", "Low current yield."
+        else:
+            status, comment = "warn", "Very high yield – check sustainability."
+        rules.append(
+            _rule(
+                "Dividend yield",
+                "Target 2–8%",
+                div_yield,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # Payout ratio < 70%
+    if _is_nan(payout):
+        rules.append(
+            _rule(
+                "Payout ratio",
+                "Payout ≤ 70%",
+                payout,
+                "na",
+                "Payout ratio not reported.",
+                as_pct=True,
+            )
+        )
+    else:
+        if payout <= 0.5:
+            status, comment = "pass", "Comfortable payout with room to reinvest."
+        elif payout <= 0.7:
+            status, comment = "warn", "Upper end of comfortable."
+        else:
+            status, comment = "fail", "Very high payout ratio."
+        rules.append(
+            _rule(
+                "Payout ratio",
+                "Payout ≤ 70%",
+                payout,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # FCF yield positive
+    if _is_nan(fcf_yield):
+        rules.append(
+            _rule(
+                "FCF yield",
+                "FCF yield ≥ 0%",
+                fcf_yield,
+                "na",
+                "Free cash flow data missing.",
+                as_pct=True,
+            )
+        )
+    else:
+        if fcf_yield >= 0.05:
+            status, comment = "pass", "Strong cash backing for dividends."
+        elif fcf_yield >= 0.0:
+            status, comment = "warn", "Thin cash backing."
+        else:
+            status, comment = "fail", "Negative free cash flow."
+        rules.append(
+            _rule(
+                "FCF yield",
+                "FCF yield ≥ 0%",
+                fcf_yield,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # Debt/Equity guardrail
+    if _is_nan(debt_to_equity):
+        rules.append(
+            _rule(
+                "Leverage",
+                "Debt/Equity ≤ 1.0",
+                debt_to_equity,
+                "na",
+                "Leverage data missing.",
+            )
+        )
+    else:
+        if debt_to_equity <= 0.5:
+            status, comment = "pass", "Conservative balance sheet."
+        elif debt_to_equity <= 1.0:
+            status, comment = "warn", "Moderate leverage."
+        else:
+            status, comment = "fail", "High leverage for dividend safety."
+        rules.append(
+            _rule("Leverage", "Debt/Equity ≤ 1.0", debt_to_equity, status, comment)
+        )
+
+    # Earnings growth >= 0 (avoid shrinking)
+    if _is_nan(earnings_growth):
+        rules.append(
+            _rule(
+                "Earnings growth",
+                "Growth ≥ 0%",
+                earnings_growth,
+                "na",
+                "Earnings growth missing.",
+                as_pct=True,
+            )
+        )
+    else:
+        if earnings_growth >= 0.05:
+            status, comment = "pass", "Growing earnings support dividend growth."
+        elif earnings_growth >= 0.0:
+            status, comment = "warn", "Flat earnings – watch closely."
+        else:
+            status, comment = "fail", "Shrinking earnings – risk to dividend."
+        rules.append(
+            _rule(
+                "Earnings growth",
+                "Growth ≥ 0%",
+                earnings_growth,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    summary = _summary_from_rules(rules, "dividend-investor")
+    return {"summary": summary, "rules": rules}
+
+
+# ---------- Fisher (Quality Growth) ----------
+
+
+def fisher_rules(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    roe = _get(metrics, "quality", "roe")
+    gross_margin = _get(metrics, "quality", "gross_margin")
+    op_margin = _get(metrics, "quality", "op_margin")
+    rev_g = _get(metrics, "growth", "revenue_growth")
+    debt_to_equity = _get(metrics, "balance_sheet", "debt_to_equity")
+
+    rules: List[Dict[str, Any]] = []
+
+    # Revenue growth ≥ 10%
+    if _is_nan(rev_g):
+        rules.append(
+            _rule(
+                "Revenue growth",
+                "Growth ≥ 10%",
+                rev_g,
+                "na",
+                "Growth data missing.",
+                as_pct=True,
+            )
+        )
+    else:
+        if rev_g >= 0.15:
+            status, comment = "pass", "Strong top-line growth."
+        elif rev_g >= 0.10:
+            status, comment = "pass", "Solid growth."
+        elif rev_g >= 0.05:
+            status, comment = "warn", "Mild growth."
+        else:
+            status, comment = "fail", "Low growth for Fisher-style idea."
+        rules.append(
+            _rule(
+                "Revenue growth",
+                "Growth ≥ 10%",
+                rev_g,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # ROE ≥ 15%
+    if _is_nan(roe):
+        rules.append(
+            _rule(
+                "ROE",
+                "ROE ≥ 15%",
+                roe,
+                "na",
+                "ROE not available.",
+                as_pct=True,
+            )
+        )
+    else:
+        if roe >= 0.20:
+            status, comment = "pass", "High quality with strong ROE."
+        elif roe >= 0.15:
+            status, comment = "pass", "Good ROE."
+        elif roe >= 0.10:
+            status, comment = "warn", "Okay ROE."
+        else:
+            status, comment = "fail", "Low ROE for quality growth."
+        rules.append(
+            _rule("ROE", "ROE ≥ 15%", roe, status, comment, as_pct=True)
+        )
+
+    # Gross margin ≥ 40%
+    if _is_nan(gross_margin):
+        rules.append(
+            _rule(
+                "Gross margin",
+                "Gross margin ≥ 40%",
+                gross_margin,
+                "na",
+                "Margin data missing.",
+                as_pct=True,
+            )
+        )
+    else:
+        if gross_margin >= 0.40:
+            status, comment = "pass", "Indicates product strength."
+        elif gross_margin >= 0.30:
+            status, comment = "warn", "Okay margin."
+        else:
+            status, comment = "fail", "Low margin for quality growth."
+        rules.append(
+            _rule(
+                "Gross margin",
+                "Gross margin ≥ 40%",
+                gross_margin,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # Operating margin ≥ 15%
+    if _is_nan(op_margin):
+        rules.append(
+            _rule(
+                "Operating margin",
+                "Operating margin ≥ 15%",
+                op_margin,
+                "na",
+                "Operating margin missing.",
+                as_pct=True,
+            )
+        )
+    else:
+        if op_margin >= 0.20:
+            status, comment = "pass", "Strong operating profitability."
+        elif op_margin >= 0.15:
+            status, comment = "pass", "Healthy operating margin."
+        elif op_margin >= 0.10:
+            status, comment = "warn", "Okay margin."
+        else:
+            status, comment = "fail", "Weak operating margin."
+        rules.append(
+            _rule(
+                "Operating margin",
+                "Operating margin ≥ 15%",
+                op_margin,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # Debt/Equity ≤ 0.5 (≤1 warning)
+    if _is_nan(debt_to_equity):
+        rules.append(
+            _rule(
+                "Leverage",
+                "Debt/Equity ≤ 0.5",
+                debt_to_equity,
+                "na",
+                "Leverage data missing.",
+            )
+        )
+    else:
+        if debt_to_equity <= 0.5:
+            status, comment = "pass", "Conservative balance sheet."
+        elif debt_to_equity <= 1.0:
+            status, comment = "warn", "Moderate leverage."
+        else:
+            status, comment = "fail", "High leverage for quality growth."
+        rules.append(
+            _rule("Leverage", "Debt/Equity ≤ 0.5", debt_to_equity, status, comment)
+        )
+
+    summary = _summary_from_rules(rules, "Fisher-style growth")
+    return {"summary": summary, "rules": rules}
+
+
 # ---------- Registry ----------
 GRAHAM = InvestorProfile(
     key="graham",
@@ -771,12 +1264,42 @@ BURRY = InvestorProfile(
     rules_fn=burry_rules,
 )
 
+SMITH = InvestorProfile(
+    key="smith",
+    name="Terry Smith",
+    label="Smith – Quality Compounders",
+    category="Quality Growth",
+    description="High-margin, high-ROE businesses with reasonable growth and moderate leverage.",
+    rules_fn=smith_rules,
+)
+
+DIVIDEND = InvestorProfile(
+    key="dividend",
+    name="Dividend Style",
+    label="Dividend – Income Quality",
+    category="Income",
+    description="Focus on sustainable dividends with reasonable yield, payout, cash flow, and leverage.",
+    rules_fn=dividend_rules,
+)
+
+FISHER = InvestorProfile(
+    key="fisher",
+    name="Philip Fisher-ish",
+    label="Fisher – Quality Growth",
+    category="Growth",
+    description="Quality growth: good ROE, strong margins, healthy revenue growth, moderate leverage.",
+    rules_fn=fisher_rules,
+)
+
 ALL_PROFILES: List[InvestorProfile] = [
     GRAHAM,
     BUFFETT,
     LYNCH,
     GREENBLATT,
     BURRY,
+    SMITH,
+    DIVIDEND,
+    FISHER,
 ]
 
 
