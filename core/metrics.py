@@ -158,4 +158,24 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
             "roe": roe,
             "roa": roa,
             "gross_margin": gross_margin,
-            "op_margin": op_margi
+            "op_margin": op_margin,
+            "net_margin": net_margin,
+            "fcf_conversion": fcf_conversion,
+        },
+        "growth": {
+            "revenue_growth": rev_growth,
+            "earnings_growth": earnings_growth,
+        },
+        "balance_sheet": {
+            "debt_to_equity": debt_to_equity,
+            "current_ratio": current_ratio,
+            "quick_ratio": quick_ratio,
+            "interest_coverage": interest_cover,
+        },
+        "dividends": {
+            "dividend_yield": dividend_yield,
+            "payout_ratio": payout_ratio,
+        },
+    }
+
+    return metrics
