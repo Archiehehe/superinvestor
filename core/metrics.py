@@ -5,6 +5,7 @@ import pandas as pd
 
 
 def _safe_div(a: Any, b: Any) -> float:
+    """Safe division that returns NaN instead of blowing up."""
     try:
         if b in (0, None) or (isinstance(b, float) and np.isnan(b)):
             return float("nan")
@@ -24,13 +25,20 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
       - balance sheet metrics
     """
 
-    info: Dict[str, Any] = raw.get("info", {}) or {}
-    history: pd.DataFrame = raw.get("history") or pd.DataFrame()
+    # ----- Raw pieces -----
+    info: Dict[str, Any] = raw.get("info") or {}
+    history = raw.get("history")
+    if history is None:
+        history = pd.DataFrame()
+    # at this point history is always a DataFrame (maybe empty)
 
-    # --- Basic price / size ---
+    # ----- Basic price / size -----
     price = info.get("currentPrice")
-    if price is None and not history.empty:
-        price = float(history["Close"].iloc[-1])
+    if price is None and not history.empty and "Close" in history.columns:
+        try:
+            price = float(history["Close"].iloc[-1])
+        except Exception:
+            price = None
 
     market_cap = info.get("marketCap")
     shares_out = info.get("sharesOutstanding")
@@ -40,12 +48,14 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
     enterprise_value = info.get("enterpriseValue")
     ebitda = info.get("ebitda")
     total_revenue = info.get("totalRevenue")
-    net_income = info.get("netIncomeToCommon") or info.get("netIncome") or info.get(
-        "profit"
+    net_income = (
+        info.get("netIncomeToCommon")
+        or info.get("netIncome")
+        or info.get("profit")
     )
     free_cash_flow = info.get("freeCashflow")
 
-    # --- Valuation metrics ---
+    # ----- Valuation metrics -----
     pe = _safe_div(market_cap, net_income) if net_income else float("nan")
     pb = info.get("priceToBook", float("nan"))
 
@@ -65,7 +75,7 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         else float("nan")
     )
 
-    # --- Quality metrics ---
+    # ----- Quality metrics -----
     roe = info.get("returnOnEquity", float("nan"))  # ratio, e.g. 0.15 = 15%
     roa = info.get("returnOnAssets", float("nan"))
     gross_margin = info.get("grossMargins", float("nan"))
@@ -79,7 +89,7 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         else float("nan")
     )
 
-    # --- Growth metrics (YoY, approximated) ---
+    # ----- Growth metrics (YoY-ish, from info) -----
     rev_growth = info.get("revenueGrowth", float("nan"))  # e.g. 0.08 = 8%
     earnings_growth = info.get("earningsGrowth", float("nan"))
 
@@ -90,8 +100,9 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         # growth_for_peg is in decimals (0.10 = 10%)
         peg_ratio = pe / (growth_for_peg * 100.0)
 
-    # --- Balance sheet / leverage metrics ---
+    # ----- Balance sheet / leverage metrics -----
     debt_to_equity = info.get("debtToEquity", float("nan"))  # often % style
+    # Convert to ratio if it looks like a percentage (e.g. 80 = 0.8)
     if not np.isnan(debt_to_equity) and debt_to_equity > 10:
         debt_to_equity = debt_to_equity / 100.0
 
@@ -99,6 +110,7 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
     quick_ratio = info.get("quickRatio", float("nan"))
     interest_cover = info.get("interestCoverage", float("nan"))
 
+    # ----- Pack into a nested metrics dict -----
     metrics: Dict[str, Any] = {
         "meta": {
             "ticker": ticker.upper(),
