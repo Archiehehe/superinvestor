@@ -23,6 +23,7 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
       - quality metrics
       - growth metrics
       - balance sheet metrics
+      - dividend metrics
     """
 
     # ----- Raw pieces -----
@@ -123,6 +124,15 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
     quick_ratio = info.get("quickRatio", float("nan"))
     interest_cover = info.get("interestCoverage", float("nan"))
 
+    # ----- Dividends -----
+    dividend_yield = info.get("dividendYield", float("nan"))  # e.g. 0.025 = 2.5%
+    if np.isnan(dividend_yield):
+        # sometimes this one is filled instead
+        trailing_yield = info.get("trailingAnnualDividendYield", float("nan"))
+        if not np.isnan(trailing_yield):
+            dividend_yield = trailing_yield
+    payout_ratio = info.get("payoutRatio", float("nan"))  # e.g. 0.4 = 40%
+
     # ----- Pack into a nested metrics dict -----
     metrics: Dict[str, Any] = {
         "meta": {
@@ -148,20 +158,4 @@ def compute_metrics(ticker: str, raw: Dict[str, Any]) -> Dict[str, Any]:
             "roe": roe,
             "roa": roa,
             "gross_margin": gross_margin,
-            "op_margin": op_margin,
-            "net_margin": net_margin,
-            "fcf_conversion": fcf_conversion,
-        },
-        "growth": {
-            "revenue_growth": rev_growth,
-            "earnings_growth": earnings_growth,
-        },
-        "balance_sheet": {
-            "debt_to_equity": debt_to_equity,
-            "current_ratio": current_ratio,
-            "quick_ratio": quick_ratio,
-            "interest_coverage": interest_cover,
-        },
-    }
-
-    return metrics
+            "op_margin": op_margi
