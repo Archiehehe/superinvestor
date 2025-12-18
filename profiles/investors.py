@@ -12,7 +12,10 @@ class InvestorProfile:
     label: str
     category: str
     description: str
-    score_fn: Callable[[Dict[str, Any]], Dict[str, Any]]
+    rules_fn: Callable[[Dict[str, Any]], Dict[str, Any]]  # returns summary & rules
+
+
+# ---------- helpers ----------
 
 
 def _get(metrics: Dict[str, Any], section: str, key: str) -> float:
@@ -30,108 +33,205 @@ def _is_nan(x: Any) -> bool:
         return False
 
 
+def _fmt_pct(x: Any) -> str:
+    try:
+        if _is_nan(x):
+            return "—"
+        return f"{float(x) * 100:,.1f}%"
+    except Exception:
+        return "—"
+
+
+def _fmt_num(x: Any) -> str:
+    try:
+        if _is_nan(x):
+            return "—"
+        return f"{float(x):,.2f}"
+    except Exception:
+        return "—"
+
+
+def _rule(
+    name: str,
+    condition: str,
+    value: Any,
+    status: str,
+    comment: str = "",
+    as_pct: bool = False,
+) -> Dict[str, Any]:
+    return {
+        "name": name,
+        "condition": condition,
+        "value": _fmt_pct(value) if as_pct else _fmt_num(value),
+        "status": status,  # "pass", "warn", "fail", "na"
+        "comment": comment,
+    }
+
+
+def _summary_from_rules(rules: List[Dict[str, Any]], label: str) -> Dict[str, Any]:
+    passes = sum(1 for r in rules if r["status"] == "pass")
+    warns = sum(1 for r in rules if r["status"] == "warn")
+    fails = sum(1 for r in rules if r["status"] == "fail")
+
+    headline = ""
+    if fails == 0 and passes >= 4:
+        headline = f"Very {label}-friendly profile."
+    elif passes >= fails:
+        headline = f"Mixed but somewhat {label}-compatible."
+    else:
+        headline = f"Not a classic {label}-style candidate."
+
+    return {
+        "passes": passes,
+        "warns": warns,
+        "fails": fails,
+        "headline": headline,
+    }
+
+
 # ---------- Graham (Deep Value) ----------
 
 
-def graham_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
+def graham_rules(metrics: Dict[str, Any]) -> Dict[str, Any]:
     pe = _get(metrics, "valuation", "pe")
     pb = _get(metrics, "valuation", "pb")
     debt_to_equity = _get(metrics, "balance_sheet", "debt_to_equity")
     current_ratio = _get(metrics, "balance_sheet", "current_ratio")
 
-    notes: List[str] = []
-    score = 0.0
-    used = 0
+    rules: List[Dict[str, Any]] = []
 
-    if not _is_nan(pe):
-        used += 1
-        notes.append(f"P/E ≈ {pe:,.1f}")
-        if pe <= 15:
-            score += 30
-            notes.append("P/E ≤ 15 ✅ (Graham-friendly)")
-        else:
-            notes.append("P/E > 15 ❌ (less Graham-style)")
+    # Rule 1: P/E ≤ 15
+    if _is_nan(pe):
+        rules.append(
+            _rule(
+                "P/E multiple",
+                "P/E ≤ 15",
+                pe,
+                "na",
+                "P/E not available from Yahoo Finance.",
+            )
+        )
     else:
-        notes.append("P/E not available")
+        status = "pass" if pe <= 15 else "fail"
+        comment = (
+            "Classic Graham low multiple."
+            if status == "pass"
+            else "Above the classic Graham threshold."
+        )
+        rules.append(_rule("P/E multiple", "P/E ≤ 15", pe, status, comment))
 
-    if not _is_nan(pb):
-        used += 1
-        notes.append(f"P/B ≈ {pb:,.1f}")
-        if pb <= 1.5:
-            score += 30
-            notes.append("P/B ≤ 1.5 ✅ (asset value support)")
-        else:
-            notes.append("P/B > 1.5 ❌")
+    # Rule 2: P/B ≤ 1.5
+    if _is_nan(pb):
+        rules.append(
+            _rule(
+                "Price to book",
+                "P/B ≤ 1.5",
+                pb,
+                "na",
+                "Book value data missing.",
+            )
+        )
     else:
-        notes.append("P/B not available")
+        status = "pass" if pb <= 1.5 else "fail"
+        comment = (
+            "Discount or near-discount to book."
+            if status == "pass"
+            else "Above classic Graham P/B."
+        )
+        rules.append(_rule("Price to book", "P/B ≤ 1.5", pb, status, comment))
 
-    if not _is_nan(pe) and not _is_nan(pb):
-        used += 1
+    # Rule 3: P/E × P/B ≤ 22.5 (famous Graham product)
+    if _is_nan(pe) or _is_nan(pb):
+        rules.append(
+            _rule(
+                "Graham product",
+                "P/E × P/B ≤ 22.5",
+                float("nan"),
+                "na",
+                "Need both P/E and P/B to check this.",
+            )
+        )
+    else:
         prod = pe * pb
-        notes.append(f"P/E × P/B ≈ {prod:,.1f}")
-        if prod <= 22.5:
-            score += 20
-            notes.append("P/E × P/B ≤ 22.5 ✅ (classic Graham condition)")
-        else:
-            notes.append("P/E × P/B > 22.5 ❌")
+        status = "pass" if prod <= 22.5 else "fail"
+        comment = (
+            "Within Graham's classic combined limit."
+            if status == "pass"
+            else "Above Graham's combined P/E×P/B limit."
+        )
+        rules.append(
+            _rule(
+                "Graham product",
+                "P/E × P/B ≤ 22.5",
+                prod,
+                status,
+            )
+        )
 
-    if not _is_nan(debt_to_equity):
-        used += 1
-        notes.append(f"Debt/Equity ≈ {debt_to_equity:,.2f}")
+    # Rule 4: Debt/Equity ≤ 0.5 (≤1.0 as warning)
+    if _is_nan(debt_to_equity):
+        rules.append(
+            _rule(
+                "Leverage",
+                "Debt/Equity ≤ 0.5",
+                debt_to_equity,
+                "na",
+                "Leverage data missing.",
+            )
+        )
+    else:
         if debt_to_equity <= 0.5:
-            score += 10
-            notes.append("Debt/Equity ≤ 0.5 ✅ (conservative)")
+            status, comment = "pass", "Very conservative leverage."
         elif debt_to_equity <= 1.0:
-            score += 5
-            notes.append("Debt/Equity ≤ 1.0 ⚠️ (okay-ish)")
+            status, comment = "warn", "Moderate leverage."
         else:
-            notes.append("Debt/Equity > 1.0 ❌")
-    else:
-        notes.append("Debt/Equity not available")
+            status, comment = "fail", "High leverage for Graham style."
+        rules.append(
+            _rule(
+                "Leverage",
+                "Debt/Equity ≤ 0.5",
+                debt_to_equity,
+                status,
+                comment,
+            )
+        )
 
-    if not _is_nan(current_ratio):
-        used += 1
-        notes.append(f"Current Ratio ≈ {current_ratio:,.2f}")
+    # Rule 5: Current ratio ≥ 2 (≥1.5 warning)
+    if _is_nan(current_ratio):
+        rules.append(
+            _rule(
+                "Liquidity",
+                "Current ratio ≥ 2.0",
+                current_ratio,
+                "na",
+                "Liquidity data missing.",
+            )
+        )
+    else:
         if current_ratio >= 2.0:
-            score += 10
-            notes.append("Current ratio ≥ 2.0 ✅ (liquidity buffer)")
+            status, comment = "pass", "Strong near-term liquidity."
         elif current_ratio >= 1.5:
-            score += 5
-            notes.append("Current ratio ≥ 1.5 ⚠️")
+            status, comment = "warn", "Acceptable but not ideal."
         else:
-            notes.append("Current ratio < 1.5 ❌")
-    else:
-        notes.append("Current ratio not available")
+            status, comment = "fail", "Weak current ratio for Graham."
+        rules.append(
+            _rule(
+                "Liquidity",
+                "Current ratio ≥ 2.0",
+                current_ratio,
+                status,
+                comment,
+            )
+        )
 
-    if used == 0:
-        return {
-            "score": float("nan"),
-            "verdict": "Insufficient data from Yahoo Finance for Graham-style check.",
-            "notes": notes,
-            "subscores": {},
-        }
-
-    verdict = "Speculative / Not classic Graham value"
-    if score >= 70:
-        verdict = "Classic Graham-style value candidate"
-    elif score >= 50:
-        verdict = "Value-leaning, partially Graham-friendly"
-
-    return {
-        "score": round(score, 1),
-        "verdict": verdict,
-        "notes": notes,
-        "subscores": {
-            "valuation": min(score, 80),
-            "balance_sheet": max(0.0, score - 80),
-        },
-    }
+    summary = _summary_from_rules(rules, "Graham")
+    return {"summary": summary, "rules": rules}
 
 
 # ---------- Buffett (Quality at a Fair Price) ----------
 
 
-def buffett_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
+def buffett_rules(metrics: Dict[str, Any]) -> Dict[str, Any]:
     roe = _get(metrics, "quality", "roe")
     gross_margin = _get(metrics, "quality", "gross_margin")
     op_margin = _get(metrics, "quality", "op_margin")
@@ -139,345 +239,490 @@ def buffett_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
     debt_to_equity = _get(metrics, "balance_sheet", "debt_to_equity")
     pe = _get(metrics, "valuation", "pe")
 
-    notes: List[str] = []
-    score = 0.0
-    used = 0
+    rules: List[Dict[str, Any]] = []
 
-    if not _is_nan(roe):
-        used += 1
-        notes.append(f"ROE ≈ {roe*100:,.1f}%")
+    # ROE ≥ 15%
+    if _is_nan(roe):
+        rules.append(
+            _rule(
+                "Return on equity",
+                "ROE ≥ 15%",
+                roe,
+                "na",
+                "ROE not available.",
+                as_pct=True,
+            )
+        )
+    else:
         if roe >= 0.20:
-            score += 25
-            notes.append("ROE ≥ 20% ✅ (excellent business)")
+            status, comment = "pass", "Excellent long-term profitability."
         elif roe >= 0.15:
-            score += 18
-            notes.append("ROE ≥ 15% ✅ (good business)")
+            status, comment = "pass", "Good profitability."
         elif roe >= 0.10:
-            score += 10
-            notes.append("ROE ≥ 10% ⚠️ (okay)")
+            status, comment = "warn", "Okay, but not standout."
         else:
-            notes.append("ROE < 10% ❌")
-    else:
-        notes.append("ROE not available")
+            status, comment = "fail", "Low ROE for a Buffett compounder."
+        rules.append(
+            _rule(
+                "Return on equity",
+                "ROE ≥ 15%",
+                roe,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
 
-    if not _is_nan(gross_margin):
-        used += 1
-        notes.append(f"Gross margin ≈ {gross_margin*100:,.1f}%")
-        if gross_margin >= 0.4:
-            score += 10
-            notes.append("Gross margin ≥ 40% ✅ (pricing power)")
+    # Gross margin ≥ 40%
+    if _is_nan(gross_margin):
+        rules.append(
+            _rule(
+                "Gross margin",
+                "Gross margin ≥ 40%",
+                gross_margin,
+                "na",
+                "Margin data missing.",
+                as_pct=True,
+            )
+        )
     else:
-        notes.append("Gross margin not available")
+        status = "pass" if gross_margin >= 0.4 else "warn"
+        comment = (
+            "Indicates pricing power and moat."
+            if status == "pass"
+            else "Not obviously a high-moat margin."
+        )
+        rules.append(
+            _rule(
+                "Gross margin",
+                "Gross margin ≥ 40%",
+                gross_margin,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
 
-    if not _is_nan(op_margin):
-        used += 1
-        notes.append(f"Operating margin ≈ {op_margin*100:,.1f}%")
+    # Operating margin ≥ 20%
+    if _is_nan(op_margin):
+        rules.append(
+            _rule(
+                "Operating margin",
+                "Operating margin ≥ 20%",
+                op_margin,
+                "na",
+                "Operating margin missing.",
+                as_pct=True,
+            )
+        )
+    else:
         if op_margin >= 0.20:
-            score += 10
-            notes.append("Operating margin ≥ 20% ✅")
-    else:
-        notes.append("Operating margin not available")
+            status, comment = "pass", "Strong operating profitability."
+        elif op_margin >= 0.12:
+            status, comment = "warn", "Decent but not elite."
+        else:
+            status, comment = "fail", "Thin operating margin."
+        rules.append(
+            _rule(
+                "Operating margin",
+                "Operating margin ≥ 20%",
+                op_margin,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
 
-    if not _is_nan(fcf_conv):
-        used += 1
-        notes.append(f"FCF / Net income ≈ {fcf_conv*100:,.1f}%")
+    # FCF / Net income between 80% and 120%
+    if _is_nan(fcf_conv):
+        rules.append(
+            _rule(
+                "Cash conversion",
+                "FCF / Net income ≈ 80–120%",
+                fcf_conv,
+                "na",
+                "Cash-flow detail missing.",
+                as_pct=True,
+            )
+        )
+    else:
         if 0.8 <= fcf_conv <= 1.2:
-            score += 10
-            notes.append("Strong cash conversion ✅")
-    else:
-        notes.append("FCF / Net income not available")
+            status, comment = "pass", "Earnings are backed by cash."
+        elif 0.6 <= fcf_conv <= 1.4:
+            status, comment = "warn", "Okay but a bit noisy."
+        else:
+            status, comment = "fail", "Earnings not reliably backed by cash."
+        rules.append(
+            _rule(
+                "Cash conversion",
+                "FCF / Net income ≈ 80–120%",
+                fcf_conv,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
 
-    if not _is_nan(debt_to_equity):
-        used += 1
-        notes.append(f"Debt/Equity ≈ {debt_to_equity:,.2f}")
+    # Debt/Equity ≤ 0.5 (≤1.0 warning)
+    if _is_nan(debt_to_equity):
+        rules.append(
+            _rule(
+                "Leverage",
+                "Debt/Equity ≤ 0.5",
+                debt_to_equity,
+                "na",
+                "Leverage data missing.",
+            )
+        )
+    else:
         if debt_to_equity <= 0.5:
-            score += 15
-            notes.append("Conservative balance sheet ✅")
+            status, comment = "pass", "Very conservative balance sheet."
         elif debt_to_equity <= 1.0:
-            score += 8
-            notes.append("Moderate leverage ⚠️")
+            status, comment = "warn", "Moderate leverage."
         else:
-            notes.append("High leverage ❌")
-    else:
-        notes.append("Debt/Equity not available")
+            status, comment = "fail", "Heavy leverage for Buffett style."
+        rules.append(
+            _rule("Leverage", "Debt/Equity ≤ 0.5", debt_to_equity, status, comment)
+        )
 
-    if not _is_nan(pe):
-        used += 1
-        notes.append(f"P/E ≈ {pe:,.1f}")
+    # P/E ≤ 20 (≤30 warning)
+    if _is_nan(pe):
+        rules.append(
+            _rule(
+                "Valuation",
+                "P/E ≤ 20",
+                pe,
+                "na",
+                "P/E not available.",
+            )
+        )
+    else:
         if pe <= 20:
-            score += 10
-            notes.append("Price not extreme for a quality business ✅")
+            status, comment = "pass", "Reasonable price for quality."
         elif pe <= 30:
-            score += 5
-            notes.append("Price somewhat rich ⚠️")
+            status, comment = "warn", "Somewhat rich valuation."
         else:
-            notes.append("Very expensive relative to earnings ❌")
-    else:
-        notes.append("P/E not available")
+            status, comment = "fail", "Very expensive relative to earnings."
+        rules.append(_rule("Valuation", "P/E ≤ 20", pe, status, comment))
 
-    if used == 0:
-        return {
-            "score": float("nan"),
-            "verdict": "Insufficient data from Yahoo Finance for Buffett-style check.",
-            "notes": notes,
-            "subscores": {},
-        }
-
-    verdict = "Not obviously a Buffett-style compounder"
-    if score >= 70:
-        verdict = "Buffett-style high quality at reasonable price"
-    elif score >= 50:
-        verdict = "Decent quality, maybe watchlist material"
-
-    return {
-        "score": round(score, 1),
-        "verdict": verdict,
-        "notes": notes,
-        "subscores": {},
-    }
+    summary = _summary_from_rules(rules, "Buffett")
+    return {"summary": summary, "rules": rules}
 
 
 # ---------- Lynch (GARP / PEG) ----------
 
 
-def lynch_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
+def lynch_rules(metrics: Dict[str, Any]) -> Dict[str, Any]:
     pe = _get(metrics, "valuation", "pe")
     peg = _get(metrics, "valuation", "peg")
     rev_g = _get(metrics, "growth", "revenue_growth")
     earn_g = _get(metrics, "growth", "earnings_growth")
     debt_to_equity = _get(metrics, "balance_sheet", "debt_to_equity")
 
-    notes: List[str] = []
-    score = 0.0
-    used = 0
+    rules: List[Dict[str, Any]] = []
 
-    growth_display = earn_g if not _is_nan(earn_g) else rev_g
-    if not _is_nan(growth_display):
-        used += 1
-        notes.append(f"Growth ≈ {growth_display*100:,.1f}%")
-        if growth_display >= 0.15:
-            score += 25
-            notes.append("Strong growth ≥ 15% ✅")
-        elif growth_display >= 0.10:
-            score += 18
-            notes.append("Solid growth ≥ 10% ✅")
-        elif growth_display >= 0.05:
-            score += 10
-            notes.append("Mild growth ≥ 5% ⚠️")
+    growth = earn_g if not _is_nan(earn_g) else rev_g
+
+    # Growth 10–20%+
+    if _is_nan(growth):
+        rules.append(
+            _rule(
+                "Growth rate",
+                "Growth ≥ 10%",
+                growth,
+                "na",
+                "Growth data missing.",
+                as_pct=True,
+            )
+        )
+    else:
+        if growth >= 0.20:
+            status, comment = "pass", "Very strong growth."
+        elif growth >= 0.10:
+            status, comment = "pass", "Solid, Lynch-style grower."
+        elif growth >= 0.05:
+            status, comment = "warn", "Mild growth."
         else:
-            notes.append("Low growth ❌")
-    else:
-        notes.append("Growth not available")
+            status, comment = "fail", "Low growth for Lynch-style idea."
+        rules.append(
+            _rule(
+                "Growth rate",
+                "Growth ≥ 10%",
+                growth,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
 
-    if not _is_nan(pe):
-        used += 1
-        notes.append(f"P/E ≈ {pe:,.1f}")
+    # PEG around 1
+    if _is_nan(peg):
+        rules.append(
+            _rule(
+                "PEG ratio",
+                "PEG ≈ 1.0",
+                peg,
+                "na",
+                "PEG can't be computed reliably.",
+            )
+        )
     else:
-        notes.append("P/E not available")
-
-    if not _is_nan(peg):
-        used += 1
-        notes.append(f"PEG ≈ {peg:,.2f}")
         if peg <= 1.0:
-            score += 25
-            notes.append("PEG ≤ 1.0 ✅ (classic Lynch)")
+            status, comment = "pass", "Classic Lynch PEG ≤ 1."
         elif peg <= 1.5:
-            score += 15
-            notes.append("PEG ≤ 1.5 ⚠️ (maybe okay)")
+            status, comment = "warn", "PEG a bit high but maybe okay."
         else:
-            notes.append("PEG > 1.5 ❌")
-    else:
-        notes.append("PEG not available")
+            status, comment = "fail", "PEG too high for GARP."
+        rules.append(_rule("PEG ratio", "PEG ≈ 1.0", peg, status, comment))
 
-    if not _is_nan(debt_to_equity):
-        used += 1
-        notes.append(f"Debt/Equity ≈ {debt_to_equity:,.2f}")
+    # P/E sanity check (not crazy high)
+    if _is_nan(pe):
+        rules.append(
+            _rule(
+                "P/E guardrail",
+                "P/E not extreme (≤ 30)",
+                pe,
+                "na",
+                "P/E missing.",
+            )
+        )
+    else:
+        if pe <= 20:
+            status, comment = "pass", "Reasonable earnings multiple."
+        elif pe <= 30:
+            status, comment = "warn", "Upper end of reasonable."
+        else:
+            status, comment = "fail", "Too expensive for Lynch-style GARP."
+        rules.append(
+            _rule("P/E guardrail", "P/E not extreme (≤ 30)", pe, status, comment)
+        )
+
+    # Debt/Equity guardrail
+    if _is_nan(debt_to_equity):
+        rules.append(
+            _rule(
+                "Leverage",
+                "Debt/Equity ≤ 1.0",
+                debt_to_equity,
+                "na",
+                "Leverage data missing.",
+            )
+        )
+    else:
         if debt_to_equity <= 0.5:
-            score += 10
-            notes.append("Low leverage ✅")
+            status, comment = "pass", "Comfortable leverage for a grower."
         elif debt_to_equity <= 1.0:
-            score += 5
-            notes.append("Moderate leverage ⚠️")
+            status, comment = "warn", "Moderate leverage."
         else:
-            notes.append("High leverage ❌")
-    else:
-        notes.append("Debt/Equity not available")
+            status, comment = "fail", "High leverage for Lynch-style stock."
+        rules.append(
+            _rule("Leverage", "Debt/Equity ≤ 1.0", debt_to_equity, status, comment)
+        )
 
-    if used == 0:
-        return {
-            "score": float("nan"),
-            "verdict": "Insufficient data from Yahoo Finance for Lynch-style check.",
-            "notes": notes,
-            "subscores": {},
-        }
-
-    verdict = "Not obviously a Lynch-style GARP stock"
-    if score >= 60:
-        verdict = "Lynch-style GARP candidate (growth at reasonable price)"
-    elif score >= 40:
-        verdict = "Partially GARP-friendly, but not ideal"
-
-    return {
-        "score": round(score, 1),
-        "verdict": verdict,
-        "notes": notes,
-        "subscores": {},
-    }
+    summary = _summary_from_rules(rules, "Lynch")
+    return {"summary": summary, "rules": rules}
 
 
 # ---------- Greenblatt (Magic Formula) ----------
 
 
-def greenblatt_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
+def greenblatt_rules(metrics: Dict[str, Any]) -> Dict[str, Any]:
     earnings_yield = _get(metrics, "valuation", "earnings_yield")
     ev_ebitda = _get(metrics, "valuation", "ev_ebitda")
     roe = _get(metrics, "quality", "roe")
 
-    notes: List[str] = []
-    score = 0.0
-    used = 0
+    rules: List[Dict[str, Any]] = []
 
-    if not _is_nan(earnings_yield):
-        used += 1
-        ey_pct = earnings_yield * 100
-        notes.append(f"Earnings yield ≈ {ey_pct:,.1f}%")
-        if ey_pct >= 15:
-            score += 30
-            notes.append("Earnings yield ≥ 15% ✅ (very cheap)")
-        elif ey_pct >= 8:
-            score += 20
-            notes.append("Earnings yield ≥ 8% ✅ (cheap-ish)")
-        else:
-            notes.append("Earnings yield < 8% ❌")
-    elif not _is_nan(ev_ebitda):
-        used += 1
-        notes.append(f"EV/EBITDA ≈ {ev_ebitda:,.1f}")
-        if ev_ebitda <= 8:
-            score += 20
-            notes.append("EV/EBITDA ≤ 8 ✅ (cheap-ish)")
-        else:
-            notes.append("EV/EBITDA > 8 ❌")
+    # Earnings yield (inverse of P/E)
+    if _is_nan(earnings_yield):
+        rules.append(
+            _rule(
+                "Earnings yield",
+                "Earnings yield ≥ 8%",
+                earnings_yield,
+                "na",
+                "Earnings yield can't be computed.",
+                as_pct=True,
+            )
+        )
     else:
-        notes.append("Earnings yield / EV multiples not available")
+        ey = earnings_yield
+        if ey >= 0.15:
+            status, comment = "pass", "Very cheap on earnings."
+        elif ey >= 0.08:
+            status, comment = "pass", "Cheap-ish on earnings."
+        else:
+            status, comment = "fail", "Not cheap for Magic Formula."
+        rules.append(
+            _rule(
+                "Earnings yield",
+                "Earnings yield ≥ 8%",
+                ey,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
 
-    if not _is_nan(roe):
-        used += 1
-        notes.append(f"ROE ≈ {roe*100:,.1f}%")
+    # Return on equity as ROC proxy
+    if _is_nan(roe):
+        rules.append(
+            _rule(
+                "Return on capital (ROE proxy)",
+                "ROE ≥ 15%",
+                roe,
+                "na",
+                "ROE not available.",
+                as_pct=True,
+            )
+        )
+    else:
         if roe >= 0.20:
-            score += 30
-            notes.append("ROE ≥ 20% ✅ (high return on capital)")
+            status, comment = "pass", "Excellent return on capital."
         elif roe >= 0.15:
-            score += 20
-            notes.append("ROE ≥ 15% ✅ (solid)")
+            status, comment = "pass", "Good return on capital."
         else:
-            notes.append("ROE < 15% ❌")
+            status, comment = "fail", "Weak ROC for Magic Formula."
+        rules.append(
+            _rule(
+                "Return on capital (ROE proxy)",
+                "ROE ≥ 15%",
+                roe,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
+
+    # EV/EBITDA sanity
+    if _is_nan(ev_ebitda):
+        rules.append(
+            _rule(
+                "EV/EBITDA",
+                "EV/EBITDA ≤ 10",
+                ev_ebitda,
+                "na",
+                "EV/EBITDA missing.",
+            )
+        )
     else:
-        notes.append("ROE (ROC proxy) not available")
+        if ev_ebitda <= 8:
+            status, comment = "pass", "Multiple consistent with Magic Formula cheapness."
+        elif ev_ebitda <= 10:
+            status, comment = "warn", "Okay, not screaming cheap."
+        else:
+            status, comment = "fail", "Too expensive on EV/EBITDA."
+        rules.append(
+            _rule("EV/EBITDA", "EV/EBITDA ≤ 10", ev_ebitda, status, comment)
+        )
 
-    if used == 0:
-        return {
-            "score": float("nan"),
-            "verdict": "Insufficient data from Yahoo Finance for Greenblatt-style check.",
-            "notes": notes,
-            "subscores": {},
-        }
-
-    verdict = "Not clearly a Magic Formula standout"
-    if score >= 60:
-        verdict = "Magic-Formula style attractive (high EY & ROC)"
-    elif score >= 40:
-        verdict = "Partially Magic-Formula style, but not top tier"
-
-    return {
-        "score": round(score, 1),
-        "verdict": verdict,
-        "notes": notes,
-        "subscores": {},
-    }
+    summary = _summary_from_rules(rules, "Greenblatt")
+    return {"summary": summary, "rules": rules}
 
 
-# ---------- Burry (Deep Value + FCF) ----------
+# ---------- Burry (Deep FCF Value) ----------
 
 
-def burry_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
+def burry_rules(metrics: Dict[str, Any]) -> Dict[str, Any]:
     fcf_yield = _get(metrics, "valuation", "fcf_yield")
     ev_ebitda = _get(metrics, "valuation", "ev_ebitda")
     pe = _get(metrics, "valuation", "pe")
     debt_to_equity = _get(metrics, "balance_sheet", "debt_to_equity")
 
-    notes: List[str] = []
-    score = 0.0
-    used = 0
+    rules: List[Dict[str, Any]] = []
 
-    if not _is_nan(fcf_yield):
-        used += 1
-        fcf_yield_pct = fcf_yield * 100
-        notes.append(f"FCF yield ≈ {fcf_yield_pct:,.1f}%")
-        if fcf_yield_pct >= 10:
-            score += 35
-            notes.append("FCF yield ≥ 10% ✅ (very cheap cash flow)")
-        elif fcf_yield_pct >= 6:
-            score += 25
-            notes.append("FCF yield ≥ 6% ✅ (cheap)")
-        else:
-            notes.append("FCF yield < 6% ❌")
+    # FCF yield
+    if _is_nan(fcf_yield):
+        rules.append(
+            _rule(
+                "FCF yield",
+                "FCF yield ≥ 8–10%",
+                fcf_yield,
+                "na",
+                "Free cash flow data missing.",
+                as_pct=True,
+            )
+        )
     else:
-        notes.append("FCF yield not available")
-
-    if not _is_nan(ev_ebitda):
-        used += 1
-        notes.append(f"EV/EBITDA ≈ {ev_ebitda:,.1f}")
-        if ev_ebitda <= 8:
-            score += 15
-            notes.append("EV/EBITDA ≤ 8 ✅ (cheap-ish)")
-        elif ev_ebitda <= 10:
-            score += 8
-            notes.append("EV/EBITDA ≤ 10 ⚠️")
+        fy = fcf_yield
+        if fy >= 0.10:
+            status, comment = "pass", "Very cheap on cash flows."
+        elif fy >= 0.06:
+            status, comment = "warn", "Cheap-ish on cash flows."
         else:
-            notes.append("EV/EBITDA > 10 ❌")
-    elif not _is_nan(pe):
-        used += 1
-        notes.append(f"P/E ≈ {pe:,.1f}")
-        if pe <= 10:
-            score += 10
-            notes.append("P/E ≤ 10 ✅")
-    else:
-        notes.append("Valuation multiples unavailable")
+            status, comment = "fail", "Not cheap on cash flows."
+        rules.append(
+            _rule(
+                "FCF yield",
+                "FCF yield ≥ 8–10%",
+                fy,
+                status,
+                comment,
+                as_pct=True,
+            )
+        )
 
-    if not _is_nan(debt_to_equity):
-        used += 1
-        notes.append(f"Debt/Equity ≈ {debt_to_equity:,.2f}")
+    # EV/EBITDA or P/E as backup
+    if _is_nan(ev_ebitda) and _is_nan(pe):
+        rules.append(
+            _rule(
+                "Valuation multiples",
+                "EV/EBITDA ≤ 10 or P/E ≤ 12",
+                float("nan"),
+                "na",
+                "Valuation multiples missing.",
+            )
+        )
+    else:
+        if not _is_nan(ev_ebitda):
+            if ev_ebitda <= 8:
+                status, comment = "pass", "EV/EBITDA consistent with deep value."
+            elif ev_ebitda <= 10:
+                status, comment = "warn", "Okay but not extreme value."
+            else:
+                status, comment = "fail", "Rich on EV/EBITDA for Burry."
+            rules.append(
+                _rule(
+                    "EV/EBITDA",
+                    "EV/EBITDA ≤ 10",
+                    ev_ebitda,
+                    status,
+                    comment,
+                )
+            )
+        else:
+            if pe <= 10:
+                status, comment = "pass", "Low P/E as backup value signal."
+            elif pe <= 14:
+                status, comment = "warn", "Moderate P/E."
+            else:
+                status, comment = "fail", "High P/E for deep value."
+            rules.append(_rule("P/E", "P/E ≤ 12", pe, status, comment))
+
+    # Leverage
+    if _is_nan(debt_to_equity):
+        rules.append(
+            _rule(
+                "Leverage",
+                "Debt/Equity ≤ 1.0",
+                debt_to_equity,
+                "na",
+                "Leverage data missing.",
+            )
+        )
+    else:
         if debt_to_equity <= 0.5:
-            score += 20
-            notes.append("Very conservative balance sheet ✅")
+            status, comment = "pass", "Very conservative balance sheet."
         elif debt_to_equity <= 1.0:
-            score += 10
-            notes.append("Moderate leverage ⚠️")
+            status, comment = "warn", "Manageable leverage."
         else:
-            notes.append("High leverage ❌")
-    else:
-        notes.append("Debt/Equity not available")
+            status, comment = "fail", "High leverage for a deep value idea."
+        rules.append(
+            _rule("Leverage", "Debt/Equity ≤ 1.0", debt_to_equity, status, comment)
+        )
 
-    if used == 0:
-        return {
-            "score": float("nan"),
-            "verdict": "Insufficient data from Yahoo Finance for Burry-style check.",
-            "notes": notes,
-            "subscores": {},
-        }
-
-    verdict = "Not a classic Burry-style deep value"
-    if score >= 65:
-        verdict = "Burry-style deep value candidate (cheap + decent balance sheet)"
-    elif score >= 45:
-        verdict = "Some Burry-style elements, but not ideal"
-
-    return {
-        "score": round(score, 1),
-        "verdict": verdict,
-        "notes": notes,
-        "subscores": {},
-    }
+    summary = _summary_from_rules(rules, "Burry")
+    return {"summary": summary, "rules": rules}
 
 
 # ---------- Registry ----------
@@ -486,8 +731,8 @@ GRAHAM = InvestorProfile(
     name="Benjamin Graham",
     label="Graham – Deep Value",
     category="Deep Value",
-    description="Classic Ben Graham: low P/E, low P/B, strong balance sheet.",
-    score_fn=graham_score,
+    description="Low multiples, strong balance sheet, and classic Ben Graham safeguards.",
+    rules_fn=graham_rules,
 )
 
 BUFFETT = InvestorProfile(
@@ -496,7 +741,7 @@ BUFFETT = InvestorProfile(
     label="Buffett – Quality at Fair Price",
     category="Quality",
     description="High-quality, high-ROE businesses with conservative leverage at sensible valuations.",
-    score_fn=buffett_score,
+    rules_fn=buffett_rules,
 )
 
 LYNCH = InvestorProfile(
@@ -504,8 +749,8 @@ LYNCH = InvestorProfile(
     name="Peter Lynch",
     label="Lynch – GARP (PEG)",
     category="GARP",
-    description="Growth at a reasonable price; focus on growth and PEG around 1.",
-    score_fn=lynch_score,
+    description="Growth at a reasonable price; PEG around 1 with decent balance sheet.",
+    rules_fn=lynch_rules,
 )
 
 GREENBLATT = InvestorProfile(
@@ -513,8 +758,8 @@ GREENBLATT = InvestorProfile(
     name="Joel Greenblatt",
     label="Greenblatt – Magic Formula",
     category="Deep Value / Quality",
-    description="High earnings yield and high return on capital.",
-    score_fn=greenblatt_score,
+    description="High earnings yield and high return on capital, Magic Formula style.",
+    rules_fn=greenblatt_rules,
 )
 
 BURRY = InvestorProfile(
@@ -522,8 +767,8 @@ BURRY = InvestorProfile(
     name="Michael Burry",
     label="Burry – Deep FCF Value",
     category="Deep Value",
-    description="Cheap on cash flows with adequate balance sheet strength.",
-    score_fn=burry_score,
+    description="Cheap on free cash flow with an acceptable balance sheet.",
+    rules_fn=burry_rules,
 )
 
 ALL_PROFILES: List[InvestorProfile] = [
