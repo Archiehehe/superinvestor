@@ -48,7 +48,11 @@ def load_sp500_universe() -> pd.DataFrame:
         raise ValueError(f"sp500_universe.csv missing columns: {missing}")
 
     df["Ticker"] = (
-        df["Ticker"].astype(str).str.upper().str.strip().str.replace(".", "-", regex=False)
+        df["Ticker"]
+        .astype(str)
+        .str.upper()
+        .str.strip()
+        .str.replace(".", "-", regex=False)
     )
     return df[required].copy()
 
@@ -69,7 +73,9 @@ def _fmt_num(x: Any, pct: bool = False) -> str:
 # Sidebar
 # ------------------------------------------------------------
 st.sidebar.title("Superinvestor Lab 🧠")
-st.sidebar.caption("See a stock or an index through different legendary investors' checklists.")
+st.sidebar.caption(
+    "See a stock or an index through different legendary investors' checklists."
+)
 
 profile_labels = [p.label for p in ALL_PROFILES]
 profile_key_map = {p.label: p for p in ALL_PROFILES}
@@ -106,7 +112,9 @@ with tab1:
     analyze_btn = st.button("Analyze Stock")
 
     if not analyze_btn:
-        st.info("Enter a ticker and click **Analyze Stock** to see investor checklists.")
+        st.info(
+            "Enter a ticker and click **Analyze Stock** to see investor checklists."
+        )
     else:
         ticker = ticker_input.upper().strip()
         if not ticker:
@@ -126,7 +134,7 @@ with tab1:
             quality = metrics.get("quality", {})
             growth = metrics.get("growth", {})
             bs = metrics.get("balance_sheet", {})
-            # NEW: be robust if dividends block is missing
+            # Be robust if dividends block is missing
             divs = metrics.get("dividends", {}) or {}
             if "dividend_yield" not in divs:
                 divs["dividend_yield"] = float("nan")
@@ -145,12 +153,6 @@ with tab1:
             )
             info_cols[2].metric("Sector", meta.get("sector") or "—")
             info_cols[3].metric("Industry", meta.get("industry") or "—")
-
-            # Dataroma link (13F / superinvestors)
-            dataroma_url = f"https://www.dataroma.com/m/stock.php?s={ticker}"
-            st.markdown(
-                f"[🔗 View real superinvestor 13F holders on Dataroma]({dataroma_url})"
-            )
 
             st.markdown("---")
 
